@@ -1,0 +1,28 @@
+#!/bin/bash
+
+URLS=(
+
+https://web.archive.org/web/20091115094944/http://stackoverflow.com/
+https://web.archive.org/web/20101229025739/http://stackoverflow.com/
+https://web.archive.org/web/20111231100355/http://stackoverflow.com/
+https://web.archive.org/web/20121231231845/http://stackoverflow.com/
+https://web.archive.org/web/20131231220201/http://stackoverflow.com/
+https://web.archive.org/web/20141231194453/http://stackoverflow.com/
+https://web.archive.org/web/20151231215204/http://stackoverflow.com/
+https://web.archive.org/web/20161231124253/http://stackoverflow.com/
+https://web.archive.org/web/20171231143703/https://stackoverflow.com/
+https://web.archive.org/web/20181231223103/https://stackoverflow.com/
+https://web.archive.org/web/20191231230732/https://stackoverflow.com/
+
+)
+
+export ACCEPT='/[0-9]+/.*//stackoverflow.com/questions/'
+
+parallel -j 6 \
+    --line-buffer \
+    wget -nc -r -l inf \
+        --no-verbose \
+        --timeout=30 \
+        --accept-regex '${ACCEPT}' \
+    ::: "${URLS[@]}"
+
