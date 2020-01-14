@@ -126,6 +126,13 @@ def coreinfo(soup):
         if m:
             return m.groupdict()
 
+    # 2019
+    url = soup.find('meta', dict(property='og:url'))
+    if url:
+        m = OG_URL_RE.search(url['content'])
+        if m:
+            return m.groupdict()
+
     return None
 
 def visit(path):
