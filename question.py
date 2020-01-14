@@ -146,12 +146,10 @@ def visit(path):
                 logging.warning("viewcount -- Can't find view count for %s", path)
                 return
 
-            result = dict(
+            return dict(
                 viewcount=vc,
                 **ci
             )
-
-            print(result)
 
     try:
         return _visit(path)
@@ -164,7 +162,7 @@ def visit(path):
 if __name__ == '__main__':
     with Pool(5) as pool:
         def push(path):
-            pool.apply_async(visit, (path,))
+            pool.apply_async(visit, (path,), callback=print)
 
         foreach_question(push)
 
