@@ -24,6 +24,14 @@ def run(queue):
 
     cache = set() # This should be shared among process but overhead shouldn't be that high
 
+    stats = dict(
+        run=0,
+        download=0,
+        write=0,
+        parse=0,
+        error=0
+    )
+
     def urltopath(url):
         url = url.replace('/?', '?')
         if url.endswith('/'):
@@ -49,6 +57,7 @@ def run(queue):
             with open(path, 'xb') as dest:
                 notify("DOWNLD", url)
                 r = requests.get(url)
+                stats['download'] += 1
                 if r.status_code != 200:
                     notify("STATUS", r.status_code, url)
                     # Retry later
@@ -58,6 +67,7 @@ def run(queue):
                     return
                     
                 notify("WRITE", path)
+                stats['write'] += 1
                 dest.write(r.content)
         except FileExistsError:
             notify("EXIST", path)
@@ -69,6 +79,7 @@ def run(queue):
 
     def parse(url, path):
         notify("PARSE", path)
+        stats['parse'] += 1
         with open(path, "rt", encoding='utf-8', errors='replace') as f:
             soup = BeautifulSoup(f, 'lxml')
 
@@ -84,7 +95,13 @@ def run(queue):
         cache.add(url)
 
     def _run(queue):
+        if not stats['run'] % 100:
+            stats['cache'] = (len(cache), sys.getsizeof(cache))
+            notify("STATS", stats)
+
         (cmd, *args) = queue.get()
+
+        stats['run'] += 1
         notify(cmd, *args)
         try:
             if cmd == LOAD:
@@ -104,6 +121,7 @@ def run(queue):
             notify('ERROR', err)
             logging.error(err, exc_info=True)
             logging.error(err.__traceback__)
+            stats['error'] += 1
 
 if __name__ == '__main__':
     WORKERS = 8
