@@ -10,7 +10,6 @@ from multiprocessing import Process, JoinableQueue
 
 # Commands
 LOAD = "LOAD"
-PARSE = "PARSE"
 
 def notify(code, *args):
     print("{:6d} {:8s}".format(os.getpid(), code), *args)
@@ -62,17 +61,12 @@ def run(queue):
             notify("EXIST", path)
             pass
 
-        queue.put((PARSE, url),False)
+        parse(url, path)
 
     ACCEPT_RE = re.compile('/[0-9]+/.*//stackoverflow.com/questions/')
 
-    def parse(url):
-        if url in cache:
-            return # this process has already handled that url
-
-        path = urltopath(url)
-
-
+    def parse(url, path):
+        notify("PARSE", path)
         with open(path, "rt", encoding='utf-8', errors='replace') as f:
             soup = BeautifulSoup(f, 'lxml')
 
