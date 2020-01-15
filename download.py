@@ -1,4 +1,5 @@
 import logging
+import signal
 import os
 import sys
 import os.path
@@ -123,9 +124,21 @@ if __name__ == '__main__':
     for url in ROOTS:
         queue.put((LOAD, url), False)
 
-    for n in range(WORKERS):
-        worker = Process(target=run, args=(queue,))
-        notify("START", "worker", n)
+    workers = [Process(target=run, args=(queue,)) for _ in range(WORKERS)]
+
+    sigint = signal.getsignal(signal.SIGINT)
+    def killall(*args):
+        for worker in workers:
+            worker.terminate()
+        sigint(*args)
+
+    signal.signal(signal.SIGINT, killall)
+
+
+    for worker in workers:
         worker.start()
+        pid = worker.pid
+        notify("START", "worker", pid)
 
     queue.join()
+
