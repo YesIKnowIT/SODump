@@ -52,26 +52,40 @@ def run(queue):
 
         path = urltopath(url)
         notify("DEST", path)
+
+        download = True
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, 'xb') as dest:
-                notify("DOWNLD", url)
-                r = requests.get(url)
-                stats['download'] += 1
-                if r.status_code != 200:
-                    notify("STATUS", r.status_code, url)
-                    # Retry later
-                    dest.close()
-                    os.unlink(path)
-                    queue.put((LOAD, url, ttl-1), False)
-                    return
-                    
-                notify("WRITE", path)
-                stats['write'] += 1
-                dest.write(r.content)
+            fstat = os.stat(path)
+            if fstat.st_size > 0:
+                download = False
         except FileExistsError:
-            notify("EXIST", path)
-            pass
+            # mkdir with a file of the same name. What do do?
+            download = False
+        except FileNotFoundError:
+            pass # That was expected
+
+        if download:
+            notify("DOWNLD", url)
+            r = requests.get(url)
+            stats['download'] += 1
+            if r.status_code != 200:
+                notify("STATUS", r.status_code, url)
+                # Retry later
+                queue.put((LOAD, url, ttl-1), False)
+                return
+
+            try:
+                with open(path, 'xb') as dest:
+                    notify("WRITE", path)
+                    dest.write(r.content)
+                    stats['write'] += 1
+            except FileExistsError:
+                # A concurrent process has likely downloaded the file
+                pass
+            except:
+                os.unlink(path)
+                raise
 
         parse(url, path)
 
