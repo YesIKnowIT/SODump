@@ -25,8 +25,9 @@ def run(queue):
     cache = set() # This should be shared among process but overhead shouldn't be that high
 
     def urltopath(url):
+        url = url.replace('/?', '?')
         if url.endswith('/'):
-            url += 'index.html'
+            url = url[:-1:] + '.index'
 
         items = url.split('/')
         if items[0] in ('http','https'):
@@ -105,7 +106,7 @@ def run(queue):
             logging.error(err.__traceback__)
 
 if __name__ == '__main__':
-    WORKERS = 5
+    WORKERS = 8
     ROOTS = (
         'https://web.archive.org/web/20091115094944/http://stackoverflow.com/',
         'https://web.archive.org/web/20101229025739/http://stackoverflow.com/',
