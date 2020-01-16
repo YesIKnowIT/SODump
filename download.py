@@ -12,6 +12,8 @@ from multiprocessing import Process, JoinableQueue
 # Commands
 LOAD = "LOAD"
 
+REQUEST_TIMEOUT=(10,4)
+
 def notify(code, *args):
     print("{:6d} {:8s}".format(os.getpid(), code), *args)
     sys.stdout.flush()
@@ -29,7 +31,9 @@ def run(queue):
         download=0,
         write=0,
         parse=0,
-        error=0
+        error=0,
+        timeout=0,
+        connerr=0
     )
 
     def urltopath(url):
@@ -67,10 +71,24 @@ def run(queue):
 
         if download:
             notify("DOWNLD", url)
-            r = requests.get(url)
-            stats['download'] += 1
-            if r.status_code != 200:
-                notify("STATUS", r.status_code, url)
+            retry = False
+            try:
+                r = requests.get(url, timeout=REQUEST_TIMEOUT)
+                stats['download'] += 1
+                if r.status_code != 200:
+                    notify("STATUS", r.status_code, url)
+                    retry = True
+            except requests.Timeout:
+                notify("TIMEOUT", url)
+                retry = True
+                stats['timeout'] += 1
+            except requests.exceptions.ConnectionError:
+                # Connection refused?
+                notify("CONNERR", url)
+                retry = True
+                stats['connerr'] += 1
+
+            if retry:
                 # Retry later
                 queue.put((LOAD, url, ttl-1), False)
                 return
@@ -132,7 +150,9 @@ def run(queue):
         try:
             _run(queue)
         except Exception as err:
+            notify('ERROR', type(err))
             notify('ERROR', err)
+            logging.error(type(err))
             logging.error(err, exc_info=True)
             logging.error(err.__traceback__)
             stats['error'] += 1
