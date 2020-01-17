@@ -13,8 +13,12 @@ from multiprocessing import Process, JoinableQueue
 # Commands
 LOAD = "LOAD"
 
-REQUESTS_TIMEOUT=(3.5,5)
+REQUESTS_CONNECT_TIMEOUT=3.5
+REQUESTS_READ_TIMEOUT=5
+REQUESTS_TIMEOUT=(REQUESTS_CONNECT_TIMEOUT,REQUESTS_READ_TIMEOUT)
 REQUESTS_COOLDOWN=15
+MAX_RETRY=5
+
 def notify(code, *args):
     print("{:6d} {:8s}".format(os.getpid(), code), *args)
     sys.stdout.flush()
@@ -32,7 +36,7 @@ def run(queue):
         download=0,
         write=0,
         parse=0,
-        drop=0,
+        ttl=[0]*(MAX_RETRY+1),
         error=0,
         timeout=0,
         connerr=0
@@ -52,12 +56,12 @@ def run(queue):
 
         return os.path.normpath(os.path.join(*items))
 
-    def load(url, ttl=5):
+    def load(url, ttl=MAX_RETRY):
         nonlocal cooldown
 
+        stats['ttl'][ttl] += 1
         if ttl <= 0:
             notify("DROP", url)
-            stats['drop'] += 1
             return
 
         if url in cache:
