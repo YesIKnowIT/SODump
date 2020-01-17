@@ -1,6 +1,7 @@
 import logging
 import signal
 import os
+import time
 import sys
 import os.path
 import re
@@ -12,8 +13,8 @@ from multiprocessing import Process, JoinableQueue
 # Commands
 LOAD = "LOAD"
 
-REQUEST_TIMEOUT=(10,4)
-
+REQUESTS_TIMEOUT=(3.5,5)
+REQUESTS_COOLDOWN=15
 def notify(code, *args):
     print("{:6d} {:8s}".format(os.getpid(), code), *args)
     sys.stdout.flush()
@@ -31,10 +32,14 @@ def run(queue):
         download=0,
         write=0,
         parse=0,
+        drop=0,
         error=0,
         timeout=0,
         connerr=0
     )
+
+    # Cooldown delay in seconds between server requests
+    cooldown = 0
 
     def urltopath(url):
         url = url.replace('/?', '?')
@@ -48,7 +53,11 @@ def run(queue):
         return os.path.normpath(os.path.join(*items))
 
     def load(url, ttl=5):
+        nonlocal cooldown
+
         if ttl <= 0:
+            notify("DROP", url)
+            stats['drop'] += 1
             return
 
         if url in cache:
@@ -70,22 +79,37 @@ def run(queue):
             pass # That was expected
 
         if download:
+            if cooldown > 0:
+                notify("SLEEP", cooldown)
+                time.sleep(cooldown)
+                cooldown = cooldown // 2
+
             notify("DOWNLD", url)
             retry = False
             try:
-                r = requests.get(url, timeout=REQUEST_TIMEOUT)
+                r = requests.get(url, timeout=REQUESTS_TIMEOUT)
                 stats['download'] += 1
                 if r.status_code != 200:
-                    notify("STATUS", r.status_code, url)
+                    notify("STATUS", r.status_code)
                     retry = True
+                if r.status_code == 429:
+                    # Too many requests
+                    # As a quick workaround, just delay the
+                    # next downloads from this worker
+                    cooldown = REQUESTS_COOLDOWN
+                elif 500 <= r.status_code <= 599:
+                    # Server error
+                    cooldown = REQUESTS_COOLDOWN
             except requests.Timeout:
                 notify("TIMEOUT", url)
                 retry = True
+                cooldown = REQUESTS_COOLDOWN
                 stats['timeout'] += 1
             except requests.exceptions.ConnectionError:
                 # Connection refused?
                 notify("CONNERR", url)
                 retry = True
+                cooldown = REQUESTS_COOLDOWN
                 stats['connerr'] += 1
 
             if retry:
@@ -121,7 +145,7 @@ def run(queue):
             for link in soup.find_all('a'):
                 href = link.get('href')
                 href = urllib.parse.urljoin(base, href)
-                if ACCEPT_RE.search(href):
+                if ACCEPT_RE.search(href) and href not in cache:
                     queue.put((LOAD, href), False)
 
         cache.add(url)
@@ -194,4 +218,4 @@ if __name__ == '__main__':
         notify("START", "worker", pid)
 
     queue.join()
-
+    notify("EOF")
