@@ -103,6 +103,10 @@ def run(queue):
                     cooldown = REQUESTS_COOLDOWN
                 elif 500 <= r.status_code <= 599:
                     # Server error
+                    # XXX Actually this is not necessarily correct:
+                    # the wayback machine also returns the 5xx status
+                    # code that was eventually returned by the original
+                    # server when the page was initially retrieved
                     cooldown = REQUESTS_COOLDOWN
             except requests.Timeout:
                 notify("TIMEOUT", url)
@@ -148,6 +152,7 @@ def run(queue):
 
             for link in soup.find_all('a'):
                 href = link.get('href')
+                (href, _) = urllib.parse.urldefrag(href)
                 href = urllib.parse.urljoin(base, href)
                 if ACCEPT_RE.search(href) and href not in cache:
                     queue.put((LOAD, href), False)
