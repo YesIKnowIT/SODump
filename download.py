@@ -178,7 +178,8 @@ def controller(urls, ctrl):
     stats = {
         'ttl': [0]*(TTL+1),
         'run': 0,
-        'error': 0
+        'error': 0,
+        'drop': 0
     }
 
     def load(url):
@@ -194,6 +195,8 @@ def controller(urls, ctrl):
             cache[url] = ttl
             stats['ttl'][ttl] += 1
             urls.put(url, False)
+        else:
+            stats['drop'] += 1
 
     def done():
         urls.task_done()
@@ -205,7 +208,7 @@ def controller(urls, ctrl):
     }
 
     def _run():
-        if not stats['run'] % 1000:
+        if not stats['run'] % 5000:
             notify("STATS", stats)
 
         (cmd, *args) = ctrl.get()
