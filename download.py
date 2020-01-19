@@ -6,12 +6,14 @@ import sys
 import os.path
 import re
 import urllib.parse
-from multiprocessing import Process, JoinableQueue
+from multiprocessing import Process, Queue, JoinableQueue
 
 
 
 # Commands
 LOAD = "LOAD"
+RETRY = "RETRY"
+DONE = "DONE"
 
 REQUESTS_CONNECT_TIMEOUT=3.5
 REQUESTS_READ_TIMEOUT=5
@@ -23,20 +25,17 @@ def notify(code, *args):
     print("{:6d} {:8s}".format(os.getpid(), code), *args)
     sys.stdout.flush()
 
-def run(queue):
+def worker(urls, ctrl):
     """ Load an URL and push back links to the queue
     """
     import requests
     from bs4 import BeautifulSoup
-
-    cache = set() # This should be shared among process but overhead shouldn't be that high
 
     stats = dict(
         run=0,
         download=0,
         write=0,
         parse=0,
-        ttl=[0]*(MAX_RETRY+1),
         error=0,
         timeout=0,
         connerr=0
@@ -56,16 +55,8 @@ def run(queue):
 
         return os.path.normpath(os.path.join(*items))
 
-    def load(url, ttl=MAX_RETRY):
+    def load(url):
         nonlocal cooldown
-
-        stats['ttl'][ttl] += 1
-        if ttl <= 0:
-            notify("DROP", url)
-            return
-
-        if url in cache:
-            return # this process has already handled that url
 
         path = urltopath(url)
         notify("DEST", path)
@@ -122,7 +113,7 @@ def run(queue):
 
             if retry:
                 # Retry later
-                queue.put((LOAD, url, ttl-1), False)
+                ctrl.put((RETRY, url,), False)
                 return
 
             try:
@@ -154,34 +145,76 @@ def run(queue):
                 href = link.get('href')
                 (href, _) = urllib.parse.urldefrag(href)
                 href = urllib.parse.urljoin(base, href)
-                if ACCEPT_RE.search(href) and href not in cache:
-                    queue.put((LOAD, href), False)
+                if ACCEPT_RE.search(href):
+                    ctrl.put((LOAD, href), False)
 
-        cache.add(url)
-
-    def _run(queue):
+    def _run():
         if not stats['run'] % 100:
-            stats['cache'] = (len(cache), sys.getsizeof(cache))
             notify("STATS", stats)
 
-        (cmd, *args) = queue.get()
-
-        stats['run'] += 1
-        notify(cmd, *args)
+        url = urls.get()
         try:
-            if cmd == LOAD:
-                load(*args)
-            elif cmd == PARSE:
-                parse(*args)
-            else:
-                raise Exception("Bad command: %s%s", cmd, args)
+            stats['run'] += 1
+            load(url)
         finally:
+            ctrl.put((DONE,), False)
             notify("DONE")
-            queue.task_done()
 
     while True:
         try:
-            _run(queue)
+            _run()
+        except Exception as err:
+            notify('ERROR', type(err))
+            notify('ERROR', err)
+            logging.error(type(err))
+            logging.error(err, exc_info=True)
+            logging.error(err.__traceback__)
+            stats['error'] += 1
+
+def controller(urls, ctrl):
+    TTL = 5
+
+    cache = {}
+    stats = {
+        'ttl': [0]*(TTL+1),
+        'run': 0,
+        'error': 0
+    }
+
+    def load(url):
+        if url not in cache:
+            cache[url] = TTL
+            stats['ttl'][TTL] += 1
+            urls.put(url, False)
+
+    def retry(url):
+        ttl = cache.setdefault(url, TTL+1)
+        if ttl > 0:
+            ttl -= 1
+            cache[url] = ttl
+            stats['ttl'][ttl] += 1
+            urls.put(url, False)
+
+    def done():
+        urls.task_done()
+
+    CMDS = {
+        LOAD: load,
+        RETRY: retry,
+        DONE: done
+    }
+
+    def _run():
+        if not stats['run'] % 1000:
+            notify("STATS", stats)
+
+        (cmd, *args) = ctrl.get()
+        stats['run'] += 1
+        CMDS[cmd](*args)
+
+    while True:
+        try:
+            _run()
         except Exception as err:
             notify('ERROR', type(err))
             notify('ERROR', err)
@@ -205,12 +238,16 @@ if __name__ == '__main__':
         'https://web.archive.org/web/20181231223103/https://stackoverflow.com/',
         'https://web.archive.org/web/20191231230732/https://stackoverflow.com/'
     )
-    
-    queue = JoinableQueue(0)
-    for url in ROOTS:
-        queue.put((LOAD, url), False)
 
-    workers = [Process(target=run, args=(queue,)) for _ in range(WORKERS)]
+    urls = JoinableQueue(0)
+    ctrl = Queue(0)
+    for url in ROOTS:
+        urls.put(url, False)
+
+    workers = [
+        Process(target=controller, args=(urls, ctrl))
+    ]
+    workers += [Process(target=worker, args=(urls, ctrl)) for _ in range(WORKERS)]
 
     sigint = signal.getsignal(signal.SIGINT)
     def killall(*args):
@@ -226,5 +263,5 @@ if __name__ == '__main__':
         pid = worker.pid
         notify("START", "worker", pid)
 
-    queue.join()
+    urls.join()
     notify("EOF")
