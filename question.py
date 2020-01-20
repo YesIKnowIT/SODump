@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 
 from multiprocessing import Pool
 
-def foreach_question(action, *, path=os.path.join('web.archive.org', 'web')):
+def foreach_question(action, *, path=os.path.join('https:','web.archive.org', 'web')):
     """ Walk through an archive dump.
     """
     queue = [ path ]
@@ -26,9 +26,7 @@ def foreach_question(action, *, path=os.path.join('web.archive.org', 'web')):
                 for root, dirs, files in os.walk(entry.path):
                     qfiles += [os.path.join(root, f) for f in files]
 
-                if len(qfiles) != 1:
-                    logging.warning("questions -- Ignoring %s (contains %d files)", entry.path, len(qfiles))
-                else:
+                if len(qfiles) == 1:
                     action(qfiles[0])
 
 
@@ -48,7 +46,7 @@ def foreach_question(action, *, path=os.path.join('web.archive.org', 'web')):
         walk(top)
 
 
-VIEWED_NNNN_TIMES_RE = re.compile('[V]iewed\s+[0-9]+(,[0-9]{3})* times?')
+VIEWED_NNNN_TIMES_RE = re.compile('[V]iewed\s+[0-9]+(,[0-9]{3})*\s+times?')
 NNNN_TIMES_RE = re.compile('[0-9]+(,[0-9]{3})* times?')
 VIEWED_RE=re.compile('[Vv]iewed')
 
@@ -59,6 +57,18 @@ def viewcount(soup):
 
     # 2019 version
     vc = soup.find('div', attrs={'title': VIEWED_NNNN_TIMES_RE})
+    if vc:
+        return asnum(vc.get_text())
+
+    # 2019 version
+    vc = soup.find('div', attrs={'title': VIEWED_NNNN_TIMES_RE})
+    if vc:
+        return asnum(vc.get_text())
+
+    # 2015 version
+    vc = soup.find('div', attrs={'id': 'question-header'})
+    if vc:
+        vc = vc.find('div', string=VIEWED_NNNN_TIMES_RE)
     if vc:
         return asnum(vc.get_text())
 
