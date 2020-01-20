@@ -32,6 +32,7 @@ def worker(urls, ctrl):
     from bs4 import BeautifulSoup
 
     stats = dict(
+        redirect=0,
         run=0,
         download=0,
         write=0,
@@ -54,6 +55,11 @@ def worker(urls, ctrl):
             del item[0]
 
         return os.path.normpath(os.path.join(*items))
+
+    ACCEPT_RE = re.compile('/[0-9]+/.*//stackoverflow.com/questions/')
+
+    def accept(url):
+        return ACCEPT_RE.search(url)
 
     def load(url):
         nonlocal cooldown
@@ -82,22 +88,24 @@ def worker(urls, ctrl):
             notify("DOWNLD", url)
             retry = False
             try:
-                r = requests.get(url, timeout=REQUESTS_TIMEOUT)
+                r = requests.get(url, allow_redirects=False, timeout=REQUESTS_TIMEOUT)
                 stats['download'] += 1
                 if r.status_code != 200:
                     notify("STATUS", r.status_code)
                     retry = True
-                if r.status_code == 429:
+                if r.status_code == 404:
+                    return
+                elif r.status_code in (301, 302, 303, 307):
+                    location = r.headers['Location']
+                    notify("REDIRECT", url, location)
+                    stats['redirect'] += 1
+                    if accept(location):
+                        ctrl.put((LOAD, location,), False)
+                    return
+                elif r.status_code == 429:
                     # Too many requests
                     # As a quick workaround, just delay the
                     # next downloads from this worker
-                    cooldown = REQUESTS_COOLDOWN
-                elif 500 <= r.status_code <= 599:
-                    # Server error
-                    # XXX Actually this is not necessarily correct:
-                    # the wayback machine also returns the 5xx status
-                    # code that was eventually returned by the original
-                    # server when the page was initially retrieved
                     cooldown = REQUESTS_COOLDOWN
             except requests.Timeout:
                 notify("TIMEOUT", url)
@@ -130,8 +138,6 @@ def worker(urls, ctrl):
 
         parse(url, path)
 
-    ACCEPT_RE = re.compile('/[0-9]+/.*//stackoverflow.com/questions/')
-
     def parse(url, path):
         notify("PARSE", path)
         stats['parse'] += 1
@@ -145,7 +151,7 @@ def worker(urls, ctrl):
                 href = link.get('href')
                 (href, _) = urllib.parse.urldefrag(href)
                 href = urllib.parse.urljoin(base, href)
-                if ACCEPT_RE.search(href):
+                if accept(href):
                     ctrl.put((LOAD, href), False)
 
     def _run():
