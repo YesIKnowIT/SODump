@@ -51,8 +51,8 @@ def worker(urls, ctrl):
             url = url[:-1:] + '.index'
 
         items = url.split('/')
-        if items[0] in ('http','https'):
-            del item[0]
+        if items[0] in ('http:','https:'):
+            del items[0]
 
         return os.path.normpath(os.path.join(*items))
 
@@ -93,6 +93,7 @@ def worker(urls, ctrl):
                 if r.status_code != 200:
                     notify("STATUS", r.status_code)
                     retry = True
+
                 if r.status_code == 404:
                     return
                 elif r.status_code in (301, 302, 303, 307):
