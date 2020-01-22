@@ -8,7 +8,14 @@ import re
 import urllib.parse
 from multiprocessing import Process, Queue, JoinableQueue
 
-
+# Number of worker processes
+#
+# You can be relatively aggressive here since most requests
+# to the wayback machine will either ends as a 404 or 302
+# response. And if we hammer the server to hard, it will reply
+# with a 429, putting one or several of our download processes
+# to sleep
+WORKERS = 16
 
 # Commands
 LOAD = "LOAD"
@@ -16,7 +23,7 @@ RETRY = "RETRY"
 DONE = "DONE"
 
 REQUESTS_CONNECT_TIMEOUT=3.5
-REQUESTS_READ_TIMEOUT=5
+REQUESTS_READ_TIMEOUT=10
 REQUESTS_TIMEOUT=(REQUESTS_CONNECT_TIMEOUT,REQUESTS_READ_TIMEOUT)
 REQUESTS_COOLDOWN=15
 MAX_RETRY=5
@@ -32,6 +39,7 @@ def worker(urls, ctrl):
     from bs4 import BeautifulSoup
 
     stats = dict(
+        sleep=0,
         redirect=0,
         run=0,
         download=0,
@@ -82,6 +90,7 @@ def worker(urls, ctrl):
         if download:
             if cooldown > 0:
                 notify("SLEEP", cooldown)
+                stats['sleep'] += 1
                 time.sleep(cooldown)
                 cooldown = cooldown // 2
 
@@ -234,7 +243,6 @@ def controller(urls, ctrl):
             stats['error'] += 1
 
 if __name__ == '__main__':
-    WORKERS = 8
     ROOTS = (
         'https://web.archive.org/web/20091115094944/http://stackoverflow.com/',
         'https://web.archive.org/web/20101229025739/http://stackoverflow.com/',
