@@ -145,6 +145,21 @@ def coreinfo(soup):
 
     return None
 
+def tags(soup):
+    tags = None
+
+    # 2009+
+    if tags is None:
+        div = soup.find('div', attrs={'class': 'post-taglist'})
+        if div:
+            tags = soup.find_all('a', attrs={'rel': 'tag'})
+
+    # Public beta
+    if tags is None:
+        tags = soup.find_all('a', attrs={'rel': 'tag'})
+
+    return sorted(set([el.get_text() for el in (tags or [])]))
+
 def visit(path):
     """ Parse a file with Beautiful Soup and extract data
     """
@@ -152,6 +167,11 @@ def visit(path):
     def _visit(path):
         with open(path, "rt", encoding='utf-8', errors='replace') as f:
             soup = BeautifulSoup(f, 'lxml')
+
+            # Ignore redirects
+            if soup.find('meta', attrs={'http-equiv':'Refresh'}):
+                return
+
 
             ci = coreinfo(soup)
             if ci is None:
@@ -163,8 +183,15 @@ def visit(path):
                 logging.warning("viewcount -- Can't find view count for %s", path)
                 return
 
+            tg = tags(soup)
+            if not tg:
+                logging.warning("tags -- Can't find tags for %s", path)
+                return
+
             return dict(
+                src=path,
                 viewcount=vc,
+                tags=tg,
                 **ci
             )
 
@@ -177,11 +204,28 @@ def visit(path):
 
 
 if __name__ == '__main__':
+    cache = set()
     with Pool(5) as pool:
+        def write(item):
+            if item is None:
+                return
+
+            key = (item['id'], item['date'], *item['tags'])
+            if key in cache:
+                return
+
+            cache.add(key)
+            print(','.join((
+                item['id'], item['date'], str(item['viewcount']), *item['tags']
+            )))
+
         def push(path):
-            pool.apply_async(visit, (path,), callback=print)
+            pool.apply_async(visit, (path,), callback=write)
 
-        foreach_question(push)
 
-        pool.close()
-        pool.join()
+        try:
+            foreach_question(push)
+            pool.close()
+            pool.join()
+        except:
+            pool.terminate()
