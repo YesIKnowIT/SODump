@@ -77,13 +77,9 @@ def worker(urls, ctrl):
 
         download = True
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
             fstat = os.stat(path)
             if fstat.st_size > 0:
                 download = False
-        except FileExistsError:
-            # mkdir with a file of the same name. What do do?
-            download = False
         except FileNotFoundError:
             pass # That was expected
 
@@ -97,7 +93,7 @@ def worker(urls, ctrl):
             notify("DOWNLD", url)
             retry = False
             try:
-                r = requests.get(url, allow_redirects=False, timeout=REQUESTS_TIMEOUT)
+                r = requests.get(url, allow_redirects=True, timeout=REQUESTS_TIMEOUT)
                 stats['download'] += 1
                 if r.status_code != 200:
                     notify("STATUS", r.status_code)
@@ -134,17 +130,42 @@ def worker(urls, ctrl):
                 ctrl.put((RETRY, url,), False)
                 return
 
+            # Store file
             try:
+                # Use real url/path
+                url = r.url
+                path = urltopath(url)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, 'xb') as dest:
                     notify("WRITE", path)
                     dest.write(r.content)
                     stats['write'] += 1
+            except NotADirectoryError:
+                pass
             except FileExistsError:
                 # A concurrent process has likely downloaded the file
                 pass
             except:
                 os.unlink(path)
                 raise
+
+            # Use links to represent redirects
+            links = [urltopath(redirect.url) for redirect in r.history]
+            for link in links:
+                try:
+                    lpath = urltopath(link)
+                    os.makedirs(os.path.dirname(lpath), exist_ok=True)
+                    os.symlink(path, lpath)
+                    notify("LINK", lpath)
+                except NotADirectoryError:
+                    pass
+                except OSError:
+                    # Not enough privilegdes (Window only)
+                    pass
+                except NotImplementedError:
+                    # Not supported on this platform
+                    pass
+
 
         parse(url, path)
 
