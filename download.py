@@ -6,6 +6,7 @@ import sys
 import os.path
 import re
 import urllib.parse
+import queue
 from multiprocessing import Process, Queue, JoinableQueue
 
 # Number of worker processes
@@ -19,6 +20,7 @@ WORKERS = 16
 
 # Commands
 LOAD = "LOAD"
+FOLLOW="FOLLOW"
 RETRY = "RETRY"
 DONE = "DONE"
 
@@ -32,7 +34,7 @@ def notify(code, *args):
     print("{:6d} {:8s}".format(os.getpid(), code), *args)
     sys.stdout.flush()
 
-def worker(urls, ctrl):
+def worker(urls, redirs, ctrl):
     """ Load an URL and push back links to the queue
     """
     import requests
@@ -93,7 +95,7 @@ def worker(urls, ctrl):
             notify("DOWNLD", url)
             retry = False
             try:
-                r = requests.get(url, allow_redirects=True, timeout=REQUESTS_TIMEOUT)
+                r = requests.get(url, allow_redirects=False, timeout=REQUESTS_TIMEOUT)
                 stats['download'] += 1
                 if r.status_code != 200:
                     notify("STATUS", r.status_code)
@@ -103,10 +105,27 @@ def worker(urls, ctrl):
                     return
                 elif r.status_code in (301, 302, 303, 307):
                     location = r.headers['Location']
-                    notify("REDIRECT", url, location)
+                    notify("REDIRECT", location)
                     stats['redirect'] += 1
                     if accept(location):
-                        ctrl.put((LOAD, location,), False)
+                        ctrl.put((FOLLOW, location,), False)
+                        notify("FOLLOW", location)
+
+                        try:
+                            lpath = urltopath(location)
+                            lsrc = os.path.relpath(path, os.path.dirname(lpath))
+                            os.makedirs(os.path.dirname(lpath), exist_ok=True)
+                            os.symlink(lsrc, lpath)
+                            notify("LINK", lpath, lsrc)
+                        except NotADirectoryError:
+                            pass
+                        except OSError:
+                            # Not enough privilegdes (Window only)
+                            pass
+                        except NotImplementedError:
+                            # Not supported on this platform
+                            pass
+
                     return
                 elif r.status_code == 429:
                     # Too many requests
@@ -149,23 +168,6 @@ def worker(urls, ctrl):
                 os.unlink(path)
                 raise
 
-            # Use links to represent redirects
-            links = [urltopath(redirect.url) for redirect in r.history]
-            for link in links:
-                try:
-                    lpath = urltopath(link)
-                    os.makedirs(os.path.dirname(lpath), exist_ok=True)
-                    os.symlink(path, lpath)
-                    notify("LINK", lpath)
-                except NotADirectoryError:
-                    pass
-                except OSError:
-                    # Not enough privilegdes (Window only)
-                    pass
-                except NotImplementedError:
-                    # Not supported on this platform
-                    pass
-
 
         parse(url, path)
 
@@ -189,7 +191,11 @@ def worker(urls, ctrl):
         if not stats['run'] % 100:
             notify("STATS", stats)
 
-        url = urls.get()
+        try:
+            url = redirs.get(False)
+        except queue.Empty:
+            url = urls.get()
+
         try:
             stats['run'] += 1
             load(url)
@@ -208,7 +214,7 @@ def worker(urls, ctrl):
             logging.error(err.__traceback__)
             stats['error'] += 1
 
-def controller(urls, ctrl):
+def controller(urls, redirs, ctrl):
     TTL = 5
 
     cache = {}
@@ -225,6 +231,13 @@ def controller(urls, ctrl):
             stats['ttl'][TTL] += 1
             urls.put(url, False)
 
+    def follow(url):
+        if url not in cache:
+            cache[url] = TTL
+            stats['ttl'][TTL] += 1
+            redirs.put(url, False)
+            urls.put(url, False) # <-- hack: put on both queues so only `urls` has to be joined
+
     def retry(url):
         ttl = cache.setdefault(url, TTL+1)
         if ttl > 0:
@@ -240,6 +253,7 @@ def controller(urls, ctrl):
 
     CMDS = {
         LOAD: load,
+        FOLLOW: follow,
         RETRY: retry,
         DONE: done
     }
@@ -279,14 +293,15 @@ if __name__ == '__main__':
     )
 
     urls = JoinableQueue(0)
+    redirs = Queue(0)
     ctrl = Queue(0)
     for url in ROOTS:
         urls.put(url, False)
 
     workers = [
-        Process(target=controller, args=(urls, ctrl))
+        Process(target=controller, args=(urls, redirs, ctrl))
     ]
-    workers += [Process(target=worker, args=(urls, ctrl)) for _ in range(WORKERS)]
+    workers += [Process(target=worker, args=(urls, redirs, ctrl)) for _ in range(WORKERS)]
 
     sigint = signal.getsignal(signal.SIGINT)
     def killall(*args):
