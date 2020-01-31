@@ -79,8 +79,9 @@ def worker(urls, redirs, ctrl):
 
         download = True
         try:
-            fstat = os.stat(path)
-            if fstat.st_size > 0:
+            stat = os.lstat(path) # do NOT follow symlinks!
+            notify("STAT", stat)
+            if stat.st_size > 0:
                 download = False
         except FileNotFoundError:
             pass # That was expected
@@ -112,15 +113,17 @@ def worker(urls, redirs, ctrl):
                         notify("FOLLOW", location)
 
                         try:
-                            lpath = urltopath(location)
-                            lsrc = os.path.relpath(path, os.path.dirname(lpath))
-                            os.makedirs(os.path.dirname(lpath), exist_ok=True)
-                            os.symlink(lsrc, lpath)
-                            notify("LINK", lpath, lsrc)
+                            target = urltopath(location)
+                            target = os.path.relpath(target, os.path.dirname(path))
+                            os.makedirs(os.path.dirname(path), exist_ok=True)
+                            os.symlink(target, path)
+                            notify("LINK", path, "->", target)
                         except NotADirectoryError:
+                            notify("NOTADIR", path)
                             pass
-                        except OSError:
+                        except OSError as err:
                             # Not enough privilegdes (Window only)
+                            notify("OSERR", err)
                             pass
                         except NotImplementedError:
                             # Not supported on this platform
@@ -172,20 +175,28 @@ def worker(urls, redirs, ctrl):
         parse(url, path)
 
     def parse(url, path):
-        notify("PARSE", path)
-        stats['parse'] += 1
-        with open(path, "rt", encoding='utf-8', errors='replace') as f:
-            soup = BeautifulSoup(f, 'lxml')
+        try:
+            with open(path, "rt", encoding='utf-8', errors='replace') as f:
+                notify("PARSE", path)
+                stats['parse'] += 1
 
-            # TODO override `base` with base specified in the html document
-            base = url
+                soup = BeautifulSoup(f, 'lxml')
 
-            for link in soup.find_all('a'):
-                href = link.get('href')
-                (href, _) = urllib.parse.urldefrag(href)
-                href = urllib.parse.urljoin(base, href)
-                if accept(href):
-                    ctrl.put((LOAD, href), False)
+                # TODO override `base` with base specified in the html document
+                base = url
+
+                for link in soup.find_all('a'):
+                    href = link.get('href')
+                    (href, _) = urllib.parse.urldefrag(href)
+                    href = urllib.parse.urljoin(base, href)
+                    if accept(href):
+                        ctrl.put((LOAD, href), False)
+        except FileNotFoundError:
+            # This is probably a link but the target has not yet be downloaded
+            # Retry later
+            notify("BROKEN", path)
+            ctrl.put((RETRY, url), False)
+            return
 
     def _run():
         if not stats['run'] % 100:
