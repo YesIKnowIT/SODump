@@ -36,29 +36,34 @@ def notify(code, *args):
     print("{:6d} {:8s}".format(os.getpid(), code), *args)
     sys.stdout.flush()
 
-def urltopath(url):
-    url = url.replace('/?', '?')
-    if url.endswith('/'):
-        url = url[:-1:] + '.index'
+PATH_FMT="archive/{timestamp:.4}/{timestamp:.6}/{timestamp:.8}/{timestamp}/{original}"
+WAYBACK_URL_FMT="https://web.archive.org/web/{timestamp}/{original}"
+def capturetopath(capture):
+    url = WAYBACK_URL_FMT.format_map(capture)
+    path = PATH_FMT.format_map(capture)
+
+    # Sanitize path
+    path = path.replace('/?', '?')
+    if path.endswith('/'):
+        path = path[:-1:] + '.index'
+    path = re.sub(r':80/', '/', path)
 
     # Skip the protocol at the start of the URL but also in anywhere in the URL because
     # some redirections in the Wayback Machine embeds the protocol after the date
-    items = [part for part in url.split('/') if part not in ('http:', 'https:')]
+    items = [part for part in path.split('/') if part not in ('http:', 'https:')]
+    path = os.path.normpath(os.path.join(*items))
 
-    return os.path.normpath(os.path.join(*items))
+    return (path, url)
 
 def worker(queue):
     """ Load an URL and push back links to the queue
     """
-    from bs4 import BeautifulSoup
-
     stats = dict(
         sleep=0,
         redirect=0,
         run=0,
         download=0,
         write=0,
-        parse=0,
         error=0,
         timeout=0,
         connerr=0
@@ -67,149 +72,89 @@ def worker(queue):
     # Cooldown delay in seconds between server requests
     cooldown = 0
 
-
-    ACCEPT_RE = re.compile('/[0-9]+/.*//stackoverflow.com/questions/')
-
-    def accept(url):
-        return ACCEPT_RE.search(url)
-
-    def load(url):
+    def load(capture):
         nonlocal cooldown
+        path, url = capturetopath(capture)
 
-        path = urltopath(url)
-        notify("DEST", path)
-
-        download = True
         try:
-            stat = os.lstat(path) # do NOT follow symlinks!
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            stat = os.stat(path)
             notify("STAT", stat)
-            if stat.st_size > 0:
-                download = False
+            if stat.st_size != 0:
+                notify("EXISTS", path)
+                return
+
         except FileNotFoundError:
             pass # That was expected
 
-        if download:
-            if cooldown > 0:
-                notify("SLEEP", cooldown)
-                stats['sleep'] += 1
-                time.sleep(cooldown)
-                cooldown = cooldown // 2
+        if cooldown > 0:
+            notify("SLEEP", cooldown)
+            stats['sleep'] += 1
+            time.sleep(cooldown)
+            cooldown = cooldown // 2
 
-            notify("DOWNLD", url)
-            retry = False
-            try:
-                r = requests.get(url, allow_redirects=False, timeout=REQUESTS_TIMEOUT)
-                stats['download'] += 1
-                if r.status_code != 200:
-                    notify("STATUS", r.status_code)
-                    retry = True
-
-                if r.status_code == 404:
-                    return
-                elif r.status_code in (301, 302, 303, 307):
-                    location = r.headers['Location']
-                    notify("REDIRECT", location)
-                    stats['redirect'] += 1
-                    if accept(location):
-                        ctrl.put((FOLLOW, location,), False)
-                        notify("FOLLOW", location)
-
-                        try:
-                            target = urltopath(location)
-                            target = os.path.relpath(target, os.path.dirname(path))
-                            os.makedirs(os.path.dirname(path), exist_ok=True)
-                            os.symlink(target, path)
-                            notify("LINK", path, "->", target)
-                        except NotADirectoryError:
-                            notify("NOTADIR", path)
-                            pass
-                        except OSError as err:
-                            # Not enough privilegdes (Window only)
-                            notify("OSERR", err)
-                            pass
-                        except NotImplementedError:
-                            # Not supported on this platform
-                            pass
-
-                    return
-                elif r.status_code == 429:
-                    # Too many requests
-                    # As a quick workaround, just delay the
-                    # next downloads from this worker
-                    cooldown = REQUESTS_COOLDOWN
-            except requests.Timeout:
-                notify("TIMEOUT", url)
-                retry = True
-                cooldown = REQUESTS_COOLDOWN
-                stats['timeout'] += 1
-            except requests.exceptions.ConnectionError:
-                # Connection refused?
-                notify("CONNERR", url)
-                retry = True
-                cooldown = REQUESTS_COOLDOWN
-                stats['connerr'] += 1
-
-            if retry:
-                # Retry later
-                ctrl.put((RETRY, url,), False)
-                return
-
-            # Store file
-            try:
-                # Use real url/path
-                url = r.url
-                path = urltopath(url)
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, 'xb') as dest:
-                    notify("WRITE", path)
-                    dest.write(r.content)
-                    stats['write'] += 1
-            except NotADirectoryError:
-                pass
-            except FileExistsError:
-                # A concurrent process has likely downloaded the file
-                pass
-            except:
-                os.unlink(path)
-                raise
-
-
-        parse(url, path)
-
-    def parse(url, path):
+        notify("DOWNLD", url)
+        retry = False
         try:
-            with open(path, "rt", encoding='utf-8', errors='replace') as f:
-                notify("PARSE", path)
-                stats['parse'] += 1
+            r = requests.get(url, timeout=REQUESTS_TIMEOUT)
+            stats['download'] += 1
+            if r.status_code != 200:
+                notify("STATUS", r.status_code)
+                retry = True
 
-                soup = BeautifulSoup(f, 'lxml')
+            if r.status_code == 429 or r.status_code >= 500:
+                # Too many requests
+                # As a quick workaround, just delay the
+                # next downloads from this worker
+                cooldown = REQUESTS_COOLDOWN
 
-                # TODO override `base` with base specified in the html document
-                base = url
+        except requests.Timeout:
+            notify("TIMEOUT", url)
+            retry = True
+            cooldown = REQUESTS_COOLDOWN
+            stats['timeout'] += 1
+        except requests.exceptions.ConnectionError:
+            # Connection refused?
+            notify("CONNERR", url)
+            retry = True
+            cooldown = REQUESTS_COOLDOWN
+            stats['connerr'] += 1
 
-                for link in soup.find_all('a'):
-                    href = link.get('href')
-                    (href, _) = urllib.parse.urldefrag(href)
-                    href = urllib.parse.urljoin(base, href)
-                    if accept(href):
-                        ctrl.put((LOAD, href), False)
-        except FileNotFoundError:
-            # This is probably a link but the target has not yet be downloaded
+        if retry:
             # Retry later
-            notify("BROKEN", path)
-            ctrl.put((RETRY, url), False)
+            notify("RETRY", url)
+            queue.put(capture)
             return
 
+        # Store file
+        try:
+            with open(path, 'xb') as dest:
+                notify("WRITE", path)
+                dest.write(r.content)
+                stats['write'] += 1
+        except NotADirectoryError:
+            pass
+        except FileExistsError:
+            notify("DUP", path)
+            # A concurrent process has likely downloaded the file
+            pass
+        except:
+            notify("UNLINK", path)
+            os.unlink(path)
+            raise
+
+
     def _run():
+        stats['run'] += 1
         if not stats['run'] % 100:
             notify("STATS", stats)
 
         capture = queue.get()
 
         try:
-            stats['run'] += 1
-            queue.task_done()
+            load(capture)
         finally:
+            queue.task_done()
             notify("DONE")
 
     while True:
@@ -226,8 +171,14 @@ def worker(queue):
 CDX_API_ENDPOINT="http://web.archive.org/cdx/search/cdx"
 
 def cdx(queue, url):
-    """ Query the CDX index to retrieve all caoture for the `url` prefix
+    """ Query the CDX index to retrieve all captures for the `url` prefix
     """
+
+    stats = {
+        'run': 0,
+        'error': 0,
+        'push': 0
+    }
 
     done = False
     params = dict(
@@ -258,83 +209,26 @@ def cdx(queue, url):
             nonlocal done
             done = True
 
-        for item in result:
-            notify("PUSH", item)
-            queue.put(item)
+        if result:
+            keys = result[0]
+            for item in result[1:]:
+                item = {
+                    k: v for k,v in zip(keys, item)
+                }
 
-        params.resumeKey = rk
+                if item.get("statuscode") == "200":
+                    notify("PUSH", item['timestamp'], item['original'])
+                    stats['push'] += 1
+                    queue.put(item)
+
+        params['resumeKey'] = rk
 
 
     while not done:
-        try:
-            _run()
-        except Exception as err:
-            notify('ERROR', type(err))
-            notify('ERROR', err)
-            logging.error(type(err))
-            logging.error(err, exc_info=True)
-            logging.error(err.__traceback__)
-            stats['error'] += 1
-
-
-        
-
-def controller(urls, redirs, ctrl):
-    TTL = 5
-
-    cache = {}
-    stats = {
-        'ttl': [0]*(TTL+1),
-        'run': 0,
-        'error': 0,
-        'drop': 0
-    }
-
-    def load(url):
-        path = urltopath(url)
-        if path not in cache:
-            cache[path] = TTL
-            stats['ttl'][TTL] += 1
-            urls.put(url, False)
-
-    def follow(url):
-        path = urltopath(url)
-        if path not in cache:
-            cache[path] = TTL
-            stats['ttl'][TTL] += 1
-            redirs.put(url, False)
-            urls.put(url, False) # <-- hack: put on both queues so only `urls` has to be joined
-
-    def retry(url):
-        path = urltopath(url)
-        ttl = cache.setdefault(path, TTL+1)
-        if ttl > 0:
-            ttl -= 1
-            cache[path] = ttl
-            stats['ttl'][ttl] += 1
-            urls.put(url, False)
-        else:
-            stats['drop'] += 1
-
-    def done():
-        urls.task_done()
-
-    CMDS = {
-        LOAD: load,
-        FOLLOW: follow,
-        RETRY: retry,
-        DONE: done
-    }
-
-    def _run():
-        if not stats['run'] % 5000:
+        stats['run'] += 1
+        if not stats['run'] % 1000:
             notify("STATS", stats)
 
-        (cmd, *args) = ctrl.get()
-        stats['run'] += 1
-        CMDS[cmd](*args)
-
-    while True:
         try:
             _run()
         except Exception as err:
@@ -344,11 +238,14 @@ def controller(urls, redirs, ctrl):
             logging.error(err, exc_info=True)
             logging.error(err.__traceback__)
             stats['error'] += 1
+
+    queue.join()
 
 if __name__ == '__main__':
     URL_PREFIX = 'http://stackoverflow.com/questions/'
+    MAX_QUEUE_LENGTH = 10000
 
-    queue = JoinableQueue(0)
+    queue = JoinableQueue(MAX_QUEUE_LENGTH)
     workers = [
         Process(target=cdx, args=(queue, URL_PREFIX))
     ]
@@ -368,5 +265,5 @@ if __name__ == '__main__':
         pid = worker.pid
         notify("START", "worker", pid)
 
-    urls.join()
+    workers[0].join()
     notify("EOF")
