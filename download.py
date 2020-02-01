@@ -34,6 +34,17 @@ def notify(code, *args):
     print("{:6d} {:8s}".format(os.getpid(), code), *args)
     sys.stdout.flush()
 
+def urltopath(url):
+    url = url.replace('/?', '?')
+    if url.endswith('/'):
+        url = url[:-1:] + '.index'
+
+    # Skip the protocol at the start of the URL but also in anywhere in the URL because
+    # some redirections in the Wayback Machine embeds the protocol after the date
+    items = [part for part in url.split('/') if part not in ('http:', 'https:')]
+
+    return os.path.normpath(os.path.join(*items))
+
 def worker(urls, redirs, ctrl):
     """ Load an URL and push back links to the queue
     """
@@ -55,16 +66,6 @@ def worker(urls, redirs, ctrl):
     # Cooldown delay in seconds between server requests
     cooldown = 0
 
-    def urltopath(url):
-        url = url.replace('/?', '?')
-        if url.endswith('/'):
-            url = url[:-1:] + '.index'
-
-        items = url.split('/')
-        if items[0] in ('http:','https:'):
-            del items[0]
-
-        return os.path.normpath(os.path.join(*items))
 
     ACCEPT_RE = re.compile('/[0-9]+/.*//stackoverflow.com/questions/')
 
@@ -237,23 +238,26 @@ def controller(urls, redirs, ctrl):
     }
 
     def load(url):
-        if url not in cache:
-            cache[url] = TTL
+        path = urltopath(url)
+        if path not in cache:
+            cache[path] = TTL
             stats['ttl'][TTL] += 1
             urls.put(url, False)
 
     def follow(url):
-        if url not in cache:
-            cache[url] = TTL
+        path = urltopath(url)
+        if path not in cache:
+            cache[path] = TTL
             stats['ttl'][TTL] += 1
             redirs.put(url, False)
             urls.put(url, False) # <-- hack: put on both queues so only `urls` has to be joined
 
     def retry(url):
-        ttl = cache.setdefault(url, TTL+1)
+        path = urltopath(url)
+        ttl = cache.setdefault(path, TTL+1)
         if ttl > 0:
             ttl -= 1
-            cache[url] = ttl
+            cache[path] = ttl
             stats['ttl'][ttl] += 1
             urls.put(url, False)
         else:
