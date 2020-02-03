@@ -155,7 +155,7 @@ def worker(ctrl, queue):
         try:
             load(capture)
         finally:
-            ctrl.put((DONE,))
+            ctrl.put((DONE,capture))
             notify("DONE")
 
     while True:
@@ -252,15 +252,33 @@ def controller(lck, ctrl, queue):
     stats = {
         'run': 0,
         'error': 0,
+        'ttl': [0]*MAX_RETRY
     }
 
+    pending = {}
+    # Keep track of entries queued, but not downloaded yet
+
     def load(data):
-        queue.put(data)
+        key = frozenset(data.items()) # dict are not hashable
+        if key not in pending:
+            retry(data)
 
     def retry(data):
-        load(data)
+        key = frozenset(data.items()) # dict are not hashable
+        ttl = pending.get(key, MAX_RETRY)
+        ttl -= 1
+        stats['ttl'][ttl] += 1
 
-    def done():
+        if ttl == 0:
+            del pending[key]
+        else:
+            pending[key] = ttl
+            queue.put(data)
+
+    def done(data):
+        key = frozenset(data.items()) # dict are not hashable
+        pending.pop(key, None)
+
         queue.task_done()
 
     def unlock():
@@ -276,6 +294,7 @@ def controller(lck, ctrl, queue):
     def _run():
         stats['run'] += 1
         if not stats['run'] % 1000:
+            stats['pending'] = len(pending)
             notify("STATS", stats)
 
         (cmd, *args) = ctrl.get()
