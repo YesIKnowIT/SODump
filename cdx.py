@@ -7,7 +7,7 @@ import os.path
 import re
 import urllib.parse
 import queue
-from multiprocessing import Process, Queue, JoinableQueue
+from multiprocessing import Process, Queue, JoinableQueue, Lock
 
 import requests
 
@@ -21,6 +21,7 @@ import requests
 WORKERS = 16
 
 # Commands
+UNLOCK="UNLOCK"
 LOAD = "LOAD"
 FOLLOW="FOLLOW"
 RETRY = "RETRY"
@@ -55,7 +56,7 @@ def capturetopath(capture):
 
     return (path, url)
 
-def worker(queue):
+def worker(ctrl, queue):
     """ Load an URL and push back links to the queue
     """
     stats = dict(
@@ -123,7 +124,7 @@ def worker(queue):
         if retry:
             # Retry later
             notify("RETRY", url)
-            queue.put(capture)
+            ctrl.put((RETRY, capture))
             return
 
         # Store file
@@ -154,7 +155,7 @@ def worker(queue):
         try:
             load(capture)
         finally:
-            queue.task_done()
+            ctrl.put((DONE,))
             notify("DONE")
 
     while True:
@@ -170,7 +171,7 @@ def worker(queue):
 
 CDX_API_ENDPOINT="http://web.archive.org/cdx/search/cdx"
 
-def cdx(queue, url):
+def cdx(lck, ctrl, url):
     """ Query the CDX index to retrieve all captures for the `url` prefix
     """
 
@@ -191,7 +192,9 @@ def cdx(queue, url):
     )
 
     def _run():
-        r = requests.get(CDX_API_ENDPOINT, params=params)
+        r = requests.get(CDX_API_ENDPOINT, 
+            timeout=REQUESTS_TIMEOUT, 
+            params=params)
         notify("CDX", r.status_code)
         if r.status_code != 200:
             time.sleep(REQUESTS_COOLDOWN)
@@ -219,7 +222,7 @@ def cdx(queue, url):
                 if item.get("statuscode") == "200":
                     notify("PUSH", item['timestamp'], item['original'])
                     stats['push'] += 1
-                    queue.put(item)
+                    ctrl.put((LOAD,item))
 
         params['resumeKey'] = rk
 
@@ -229,6 +232,56 @@ def cdx(queue, url):
         if not stats['run'] % 1000:
             notify("STATS", stats)
 
+        try:
+            lck.acquire()
+            _run()
+        except Exception as err:
+            notify('ERROR', type(err))
+            notify('ERROR', err)
+            logging.error(type(err))
+            logging.error(err, exc_info=True)
+            logging.error(err.__traceback__)
+            stats['error'] += 1
+        finally:
+            ctrl.put((UNLOCK,))
+
+    notify('QUIT')
+
+
+def controller(lck, ctrl, queue):
+    stats = {
+        'run': 0,
+        'error': 0,
+    }
+
+    def load(data):
+        queue.put(data)
+
+    def retry(data):
+        load(data)
+
+    def done():
+        queue.task_done()
+
+    def unlock():
+        lck.release()
+
+    CMDS = {
+        UNLOCK: unlock,
+        LOAD: load,
+        RETRY: retry,
+        DONE: done
+    }
+
+    def _run():
+        stats['run'] += 1
+        if not stats['run'] % 1000:
+            notify("STATS", stats)
+
+        (cmd, *args) = ctrl.get()
+        CMDS[cmd](*args)
+
+    while True:
         try:
             _run()
         except Exception as err:
@@ -246,10 +299,14 @@ if __name__ == '__main__':
     MAX_QUEUE_LENGTH = 10000
 
     queue = JoinableQueue(MAX_QUEUE_LENGTH)
+    ctrl = Queue(0)
+    lck = Lock()
+
     workers = [
-        Process(target=cdx, args=(queue, URL_PREFIX))
+        Process(target=cdx, args=(lck, ctrl, URL_PREFIX)),
+        Process(target=controller, args=(lck, ctrl, queue))
     ]
-    workers += [Process(target=worker, args=(queue,)) for _ in range(WORKERS)]
+    workers += [Process(target=worker, args=(ctrl, queue)) for _ in range(WORKERS)]
 
     sigint = signal.getsignal(signal.SIGINT)
     def killall(*args):
