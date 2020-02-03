@@ -183,49 +183,50 @@ def cdx(lck, ctrl, url):
 
     done = False
     params = dict(
-        output='json',
         url=url,
         matchType='prefix',
-        limit=1000,
+        limit=2000,
         showResumeKey='true',
         resumeKey=None
     )
 
+    fields = ('timestamp', 'original', 'statuscode')
+    params['fl'] = ",".join(fields)
+
     def _run():
         r = requests.get(CDX_API_ENDPOINT, 
-            timeout=REQUESTS_TIMEOUT, 
+            timeout=REQUESTS_TIMEOUT,
+            stream=True,
             params=params)
         notify("CDX", r.status_code)
         if r.status_code != 200:
             time.sleep(REQUESTS_COOLDOWN)
-            return
+            return False
 
-        # else
-        result = r.json()
+        count = 0
+        for line in r.iter_lines():
+            if not line:
+                # ignore empty lines
+                continue
 
-        if result[-2:-1] == [[]]:
-            rk = urllib.parse.unquote_plus(result[-1][0])
-            notify("RK", rk)
-            result = result[:-2]
-        else:
-            rk = None
-            nonlocal done
-            done = True
+            count += 1
+            line = line.decode('utf-8')
+            item = line.split()
+            if len(item) == 1:
+                # resume key
+                params['resumeKey'] = urllib.parse.unquote_plus(item[0])
+                break
 
-        if result:
-            keys = result[0]
-            for item in result[1:]:
-                item = {
-                    k: v for k,v in zip(keys, item)
-                }
+            # else
+            item = {
+                k: v for k,v in zip(fields, item)
+            }
+            if item.get("statuscode") == "200":
+                notify("PUSH", item['timestamp'], item['original'])
+                stats['push'] += 1
+                ctrl.put((LOAD,item))
 
-                if item.get("statuscode") == "200":
-                    notify("PUSH", item['timestamp'], item['original'])
-                    stats['push'] += 1
-                    ctrl.put((LOAD,item))
-
-        params['resumeKey'] = rk
-
+        return count == 0
 
     while not done:
         stats['run'] += 1
@@ -234,7 +235,7 @@ def cdx(lck, ctrl, url):
 
         try:
             lck.acquire()
-            _run()
+            done = _run()
         except Exception as err:
             notify('ERROR', type(err))
             notify('ERROR', err)
