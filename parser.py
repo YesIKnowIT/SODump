@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import re
 from pathlib import Path
 from bs4 import BeautifulSoup
@@ -51,7 +52,7 @@ def visit(path):
 
                 tags = question.find_all('a', attrs={'rel': 'tag'})
                 tags = sorted(set([el.get_text() for el in tags]))
-            
+
                 yield dict(
                     src=path,
                     id=qid,
@@ -209,8 +210,32 @@ def visit(path):
         logging.error(err, exc_info=True)
         logging.error(err.__traceback__)
 
+def stdin():
+    for line in sys.stdin:
+        yield Path(line.rstrip())
+
+def glob():
+    for path in Path(ROOT_DIR).glob('**/questions/*/*'):
+        if path.is_file():
+            yield path
+
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--with-path", help="Add source file path to the output",
+            action='store_true')
+    parser.add_argument("--stdin", help="Read path from stdin",
+            dest='reader',
+            default=glob, action='store_const', const=stdin)
+
+
+    args = parser.parse_args()
+    return args
 
 if __name__ == '__main__':
+    args = parse_args()
+
     cache = set()
     with Pool(5) as pool:
         def write(data):
@@ -220,14 +245,20 @@ if __name__ == '__main__':
                     return
 
                 cache.add(key)
-                print(','.join(str(i) for i in (
-                    item['id'], item['date'], item['viewcount'], *item['tags'], item['src']
-                )))
+                fields = [
+                    item['id'],
+                    item['date'],
+                    item['viewcount'],
+                    *item['tags'],
+                ]
+                if args.with_path:
+                    fields.append(item['src'])
+
+                print(','.join(str(i) for i in fields))
 
         try:
-            for path in Path(ROOT_DIR).glob('**/questions/*/*'):
-                if path.is_file():
-                    pool.apply_async(visit, (path,), callback=write)
+            for path in args.reader():
+                pool.apply_async(visit, (path,), callback=write)
 
             pool.close()
             pool.join()

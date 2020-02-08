@@ -167,6 +167,8 @@ def worker(ctrl, queue):
     while True:
         try:
             _run()
+        except BrokenPipeError:
+            break
         except Exception as err:
             notify('ERROR', type(err))
             notify('ERROR', err)
@@ -242,6 +244,8 @@ def cdx(lck, ctrl, url):
         try:
             lck.acquire()
             done = _run()
+        except BrokenPipeError:
+            done = True
         except Exception as err:
             notify('ERROR', type(err))
             notify('ERROR', err)
@@ -251,8 +255,6 @@ def cdx(lck, ctrl, url):
             stats['error'] += 1
         finally:
             ctrl.put((UNLOCK,))
-
-    notify('QUIT')
 
 
 def controller(lck, ctrl, queue):
@@ -343,10 +345,16 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, killall)
 
 
-    for worker in workers:
-        worker.start()
-        pid = worker.pid
-        notify("START", "worker", pid)
+    try:
+        for worker in workers:
+            worker.start()
+            pid = worker.pid
+            notify("START", "worker", pid)
 
-    workers[0].join()
-    notify("EOF")
+        workers[0].join()
+        notify("EOF")
+    except BrokenPipeError:
+        pass
+    finally:
+        for worker in workers:
+            worker.terminate()
