@@ -85,6 +85,9 @@ def worker(ctrl, queue):
                 notify("EXISTS", path)
                 return
 
+            # else remove the empty file
+            os.unlink(path)
+
         except FileNotFoundError:
             pass # That was expected
 
@@ -138,6 +141,9 @@ def worker(ctrl, queue):
         except FileExistsError:
             notify("DUP", path)
             # A concurrent process has likely downloaded the file
+            # unlink and retry to be sure
+            os.unlink(path)
+            ctrl.put((RETRY, capture))
             pass
         except:
             notify("UNLINK", path)
