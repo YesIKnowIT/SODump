@@ -13,12 +13,12 @@ import requests
 
 # Number of worker processes
 #
-# You can be relatively aggressive here since most requests
-# to the wayback machine will either ends as a 404 or 302
-# response. And if we hammer the server to hard, it will reply
-# with a 429, putting one or several of our download processes
+# You can be relatively aggressive here since if we hammer
+# the server to hard, it will either ends up with a connection error
+# or a 503 or 426 response status.
+# Any of these event will put one or several of our download processes
 # to sleep
-WORKERS = 16
+WORKERS = 20
 
 # Commands
 UNLOCK="UNLOCK"
@@ -186,14 +186,17 @@ def cdx(lck, ctrl, url):
     stats = {
         'run': 0,
         'error': 0,
-        'push': 0
+        'push': 0,
+        'timeout': 0,
+        'connerr': 0,
     }
 
     done = False
+    cooldown = 0
     params = dict(
         url=url,
         matchType='prefix',
-        limit=2000,
+        limit=5000,
         showResumeKey='true',
         resumeKey=None
     )
@@ -202,13 +205,19 @@ def cdx(lck, ctrl, url):
     params['fl'] = ",".join(fields)
 
     def _run():
+        nonlocal cooldown
+        if cooldown > 0:
+            cooldown = min(REQUESTS_COOLDOWN, cooldown*2)
+            notify("SLEEP", cooldown)
+            time.sleep(cooldown)
+
         r = requests.get(CDX_API_ENDPOINT, 
             timeout=REQUESTS_TIMEOUT,
             stream=True,
             params=params)
         notify("CDX", r.status_code)
         if r.status_code != 200:
-            time.sleep(REQUESTS_COOLDOWN)
+            cooldown = 1
             return False
 
         count = 0
@@ -234,6 +243,7 @@ def cdx(lck, ctrl, url):
                 stats['push'] += 1
                 ctrl.put((LOAD,item))
 
+        cooldown = 0
         return count == 0
 
     while not done:
@@ -244,6 +254,14 @@ def cdx(lck, ctrl, url):
         try:
             lck.acquire()
             done = _run()
+        except requests.Timeout:
+            notify("TIMEOUT", params['resumeKey'])
+            stats['timeout'] += 1
+            cooldown = 1
+        except requests.exceptions.ConnectionError:
+            notify("CONNERR", params['resumeKey'])
+            stats['connerr'] += 1
+            cooldown = 1
         except BrokenPipeError:
             done = True
         except Exception as err:
