@@ -95,33 +95,33 @@ def worker(ctrl, queue):
             notify("SLEEP", cooldown)
             stats['sleep'] += 1
             time.sleep(cooldown)
-            cooldown = cooldown // 2
+            cooldown = min(REQUESTS_COOLDOWN, cooldown*2)
 
         notify("DOWNLD", url)
         retry = False
         try:
             r = requests.get(url, timeout=REQUESTS_TIMEOUT)
             stats['download'] += 1
-            if r.status_code != 200:
+            if r.status_code == 200:
+                cooldown = 0
+            else:
                 notify("STATUS", r.status_code)
                 retry = True
 
             if r.status_code == 429 or r.status_code >= 500:
-                # Too many requests
-                # As a quick workaround, just delay the
-                # next downloads from this worker
-                cooldown = REQUESTS_COOLDOWN
+                # Too many requests or server error
+                cooldown = max(cooldown, 1)
 
         except requests.Timeout:
             notify("TIMEOUT", url)
             retry = True
-            cooldown = REQUESTS_COOLDOWN
+            cooldown = max(cooldown, 1)
             stats['timeout'] += 1
         except requests.exceptions.ConnectionError:
             # Connection refused?
             notify("CONNERR", url)
             retry = True
-            cooldown = REQUESTS_COOLDOWN
+            cooldown = max(cooldown, 1)
             stats['connerr'] += 1
 
         if retry:
