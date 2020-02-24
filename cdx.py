@@ -15,7 +15,7 @@ import requests
 #
 # You can be relatively aggressive here since if we hammer
 # the server to hard, it will either ends up with a connection error
-# or a 503 or 426 response status.
+# or a 503 or 429 response status.
 # Any of these event will put one or several of our download processes
 # to sleep
 WORKERS = 20
@@ -27,15 +27,40 @@ FOLLOW="FOLLOW"
 RETRY = "RETRY"
 DONE = "DONE"
 
-REQUESTS_CONNECT_TIMEOUT=3.5
+REQUESTS_CONNECT_TIMEOUT=6.5
 REQUESTS_READ_TIMEOUT=10
 REQUESTS_TIMEOUT=(REQUESTS_CONNECT_TIMEOUT,REQUESTS_READ_TIMEOUT)
 REQUESTS_COOLDOWN=15
+MAX_SLEEP_TIME=120
 MAX_RETRY=5
 
 def notify(code, *args):
     print("{:6d} {:8s}".format(os.getpid(), code), *args)
     sys.stdout.flush()
+
+class Cooldown:
+    def __init__(self):
+        self.cooldown = 0
+        self.end = time.time()
+
+    def set(self, value=REQUESTS_COOLDOWN):
+        self.cooldown = max(self.cooldown, value)
+        self.end = self.cooldown + time.time()
+
+    def wait(self):
+        delay = int(self.end - time.time())
+
+        if delay > 0:
+            notify("SLEEP", delay)
+            time.sleep(delay)
+            self.cooldown = min(self.cooldown*2, MAX_SLEEP_TIME)
+            return True
+
+        return False
+
+    def clear(self):
+        self.cooldown = 0
+        self.end = time.time()
 
 PATH_FMT="archive/{timestamp:.4}/{timestamp:.6}/{timestamp:.8}/{timestamp}/{original}"
 WAYBACK_URL_FMT="https://web.archive.org/web/{timestamp}/{original}"
@@ -70,11 +95,9 @@ def worker(ctrl, queue):
         connerr=0
     )
 
-    # Cooldown delay in seconds between server requests
-    cooldown = 0
+    cooldown = Cooldown()
 
     def load(capture):
-        nonlocal cooldown
         path, url = capturetopath(capture)
 
         try:
@@ -91,37 +114,35 @@ def worker(ctrl, queue):
         except FileNotFoundError:
             pass # That was expected
 
-        if cooldown > 0:
-            notify("SLEEP", cooldown)
+        if cooldown.wait():
             stats['sleep'] += 1
-            time.sleep(cooldown)
-            cooldown = min(REQUESTS_COOLDOWN, cooldown*2)
 
         notify("DOWNLD", url)
         retry = False
         try:
             r = requests.get(url, timeout=REQUESTS_TIMEOUT)
             stats['download'] += 1
-            if r.status_code == 200:
-                cooldown = 0
-            else:
+            if r.status_code != 200:
                 notify("STATUS", r.status_code)
                 retry = True
 
             if r.status_code == 429 or r.status_code >= 500:
                 # Too many requests or server error
-                cooldown = max(cooldown, 1)
+                cooldown.set()
+            else:
+                cooldown.clear()
+
 
         except requests.Timeout:
             notify("TIMEOUT", url)
             retry = True
-            cooldown = max(cooldown, 1)
+            cooldown.set()
             stats['timeout'] += 1
         except requests.exceptions.ConnectionError:
             # Connection refused?
             notify("CONNERR", url)
             retry = True
-            cooldown = max(cooldown, 1)
+            cooldown.set()
             stats['connerr'] += 1
 
         if retry:
@@ -192,7 +213,7 @@ def cdx(lck, ctrl, url):
     }
 
     done = False
-    cooldown = 0
+    cooldown = Cooldown()
     params = dict(
         url=url,
         matchType='prefix',
@@ -205,19 +226,15 @@ def cdx(lck, ctrl, url):
     params['fl'] = ",".join(fields)
 
     def _run():
-        nonlocal cooldown
-        if cooldown > 0:
-            cooldown = min(REQUESTS_COOLDOWN, cooldown*2)
-            notify("SLEEP", cooldown)
-            time.sleep(cooldown)
+        cooldown.wait()
 
-        r = requests.get(CDX_API_ENDPOINT, 
+        r = requests.get(CDX_API_ENDPOINT,
             timeout=REQUESTS_TIMEOUT,
             stream=True,
             params=params)
         notify("CDX", r.status_code)
         if r.status_code != 200:
-            cooldown = 1
+            cooldown.set()
             return False
 
         count = 0
@@ -243,7 +260,7 @@ def cdx(lck, ctrl, url):
                 stats['push'] += 1
                 ctrl.put((LOAD,item))
 
-        cooldown = 0
+        cooldown.clear()
         return count == 0
 
     while not done:
@@ -257,11 +274,11 @@ def cdx(lck, ctrl, url):
         except requests.Timeout:
             notify("TIMEOUT", params['resumeKey'])
             stats['timeout'] += 1
-            cooldown = 1
+            cooldown.set(1)
         except requests.exceptions.ConnectionError:
             notify("CONNERR", params['resumeKey'])
             stats['connerr'] += 1
-            cooldown = 1
+            cooldown.set(1)
         except BrokenPipeError:
             done = True
         except Exception as err:
