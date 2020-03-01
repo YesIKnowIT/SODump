@@ -238,12 +238,13 @@ def cdx(lck, ctrl, url):
             return False
 
         count = 0
+        items = []
         for line in r.iter_lines():
+            count += 1
             if not line:
                 # ignore empty lines
                 continue
 
-            count += 1
             line = line.decode('utf-8')
             item = line.split()
             if len(item) == 1:
@@ -256,6 +257,9 @@ def cdx(lck, ctrl, url):
                 k: v for k,v in zip(fields, item)
             }
             if item.get("statuscode") == "200":
+                items.append(item)
+
+        for item in items:
                 notify("PUSH", item['timestamp'], item['original'])
                 stats['push'] += 1
                 ctrl.put((LOAD,item))
