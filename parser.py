@@ -9,6 +9,8 @@ from multiprocessing import Pool
 
 ROOT_DIR = 'web.archive.org'
 
+class ImpreciseViewCountError(Exception):
+    pass
 
 def visit(path):
     """ Parse a file with Beautiful Soup and extract data
@@ -66,24 +68,35 @@ def visit(path):
         #raise NotImplementedError
 
     def _visit_question(soup):
-        VIEWED_NNNN_TIMES_RE = re.compile('[V]iewed\s+[0-9]+(,[0-9]{3})*\s+times?')
-        NNNN_TIMES_RE = re.compile('[0-9]+(,[0-9]{3})* times?')
+        VIEWED_NNNN_TIMES_RE = re.compile('[Vv]iewed\s+[0-9]+(,[0-9]{3})\s+times?')
+        NNNN_TIMES_RE = re.compile('[0-9]+(,[0-9]{3})*\s+times?')
         VIEWED_RE=re.compile('[Vv]iewed')
 
         def viewcount(soup):
             def asnum(txt):
-                count = re.search('([0-9]+(?:,[0-9]{3})*)[^0-9]*$', str(txt)).group(1)
-                return int(count.replace(',',''))
+                count, suffix = re.search('([0-9]+(?:,[0-9]{3})*)([k]?)', str(txt)).group(1, 2)
+
+                if suffix:
+                    raise ImpreciseViewCountError("View count {}{} is imprecise for {}".format(count, suffix, path))
+
+                count = count.replace(',','')
+                return int(count)
 
             # 2019 version
             vc = soup.find('div', attrs={'title': VIEWED_NNNN_TIMES_RE})
             if vc:
                 return asnum(vc.get_text())
 
-            # 2019 version
+            # 2019 version (alternate)
             vc = soup.find('div', attrs={'title': VIEWED_NNNN_TIMES_RE})
             if vc:
                 return asnum(vc.get_text())
+
+            vc = soup.find('div', attrs={'itemprop': 'mainEntity'})
+            if vc:
+                vc = vc.find('span', string='Viewed')
+            if vc:
+                return asnum(" ".join(vc.parent.strings))
 
             # 2015 version
             vc = soup.find('div', attrs={'id': 'question-header'})
@@ -205,6 +218,8 @@ def visit(path):
 
     try:
         return list(_visit(path))
+    except ImpreciseViewCountError as err:
+        logging.warning(err)
     except Exception as err:
         logging.error('unexpected -- While processing %s', path)
         logging.error(err, exc_info=True)
