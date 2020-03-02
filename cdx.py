@@ -103,9 +103,9 @@ def worker(ctrl, queue):
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             stat = os.stat(path)
-            notify("STAT", stat)
+            # notify("STAT", stat)
             if stat.st_size != 0:
-                notify("EXISTS", path)
+                notify("EXISTS", path, stat.st_size)
                 return
 
             # else remove the empty file
@@ -154,8 +154,8 @@ def worker(ctrl, queue):
         # Store file
         try:
             with open(path, 'xb') as dest:
-                notify("WRITE", path)
-                dest.write(r.content)
+                size = dest.write(r.content)
+                notify("WRITE", path, size)
                 stats['write'] += 1
         except NotADirectoryError:
             pass
