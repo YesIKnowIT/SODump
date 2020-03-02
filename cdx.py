@@ -1,5 +1,4 @@
 import logging
-import signal
 import os
 import time
 import sys
@@ -8,6 +7,7 @@ import re
 import urllib.parse
 import queue
 from multiprocessing import Process, Queue, JoinableQueue, Lock
+from utils.pm import ProcessManager
 
 import requests
 
@@ -360,32 +360,6 @@ def controller(lck, ctrl, queue):
             stats['error'] += 1
 
     queue.join()
-
-class ProcessManager:
-    def __init__(self, *workers):
-        self.workers = workers[:]
-
-        self._install_handler()
-
-    def _install_handler(self):
-        def killall(*args):
-            for worker in self.workers:
-                worker.terminate()
-            sigint(*args)
-
-        sigint = signal.getsignal(signal.SIGINT)
-        signal.signal(signal.SIGINT, killall)
-
-    def terminate(self):
-        for worker in self.workers:
-            worker.terminate()
-
-    def start(self):
-        for worker in self.workers:
-            worker.start()
-
-    def __getitem__(self, index):
-        return self.workers[index]
 
 if __name__ == '__main__':
     URL_PREFIX = 'http://stackoverflow.com/questions/'
