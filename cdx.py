@@ -361,6 +361,32 @@ def controller(lck, ctrl, queue):
 
     queue.join()
 
+class ProcessManager:
+    def __init__(self, *workers):
+        self.workers = workers[:]
+
+        self._install_handler()
+
+    def _install_handler(self):
+        def killall(*args):
+            for worker in self.workers:
+                worker.terminate()
+            sigint(*args)
+
+        sigint = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, killall)
+
+    def terminate(self):
+        for worker in self.workers:
+            worker.terminate()
+
+    def start(self):
+        for worker in self.workers:
+            worker.start()
+
+    def __getitem__(self, index):
+        return self.workers[index]
+
 if __name__ == '__main__':
     URL_PREFIX = 'http://stackoverflow.com/questions/'
     MAX_QUEUE_LENGTH = 10000
@@ -369,31 +395,18 @@ if __name__ == '__main__':
     ctrl = Queue(0)
     lck = Lock()
 
-    workers = [
+    pm = ProcessManager(
         Process(target=cdx, args=(lck, ctrl, URL_PREFIX)),
-        Process(target=controller, args=(lck, ctrl, queue))
-    ]
-    workers += [Process(target=worker, args=(ctrl, queue)) for _ in range(WORKERS)]
-
-    sigint = signal.getsignal(signal.SIGINT)
-    def killall(*args):
-        for worker in workers:
-            worker.terminate()
-        sigint(*args)
-
-    signal.signal(signal.SIGINT, killall)
-
+        Process(target=controller, args=(lck, ctrl, queue)),
+        *[Process(target=worker, args=(ctrl, queue)) for _ in range(WORKERS)]
+    )
 
     try:
-        for worker in workers:
-            worker.start()
-            pid = worker.pid
-            notify("START", "worker", pid)
+        pm.start()
 
-        workers[0].join()
+        pm[0].join()
         notify("EOF")
     except BrokenPipeError:
         pass
     finally:
-        for worker in workers:
-            worker.terminate()
+        pm.terminate()
