@@ -62,7 +62,7 @@ def parser(queue, ctrl):
                     tags = sorted(set([el.get_text() for el in tags]))
 
                     yield dict(
-                        src=path,
+                        src=path.as_posix(),
                         id=qid,
                         date=date,
                         viewcount=views,
@@ -216,7 +216,7 @@ def parser(queue, ctrl):
                 return
 
             yield dict(
-                src=path,
+                src=path.as_posix(),
                 viewcount=vc,
                 tags=tg,
                 **ci
@@ -225,8 +225,8 @@ def parser(queue, ctrl):
 
 
         try:
-            for row in _visit(path):
-                ctrl.put((STORE, row))
+            result = tuple(_visit(path))
+            ctrl.put((STORE, path.as_posix(), result))
         except ImpreciseViewCountError as err:
             logging.warning(err)
         except Exception as err:
@@ -249,32 +249,73 @@ def parser(queue, ctrl):
             logging.error(err, exc_info=True)
             logging.error(err.__traceback__)
 
+
+
 def controller(queue, ctrl):
+    import sqlite3
 
     def _visit(path):
-        queue.put(path)
+        cursor.execute(DB_SELECT_SOURCE, dict(path=path.as_posix()))
+        if not cursor.fetchall():
+            queue.put(path)
 
-    def _store(item):
-        key = (item['id'], item['date'], *item['tags'])
-        fields = [
-            item['id'],
-            item['date'],
-            item['viewcount'],
-            *item['tags'],
-        ]
-        if args.with_path:
-            fields.append(item['src'])
+    def _store(path, items):
+        cursor.execute("BEGIN DEFERRED TRANSACTION")
+        try:
+            cursor.execute(DB_INSERT_SOURCE, dict(path=path))
+            for item in items:
+                cursor.execute(DB_INSERT_VIEWCOUNT, dict(
+                    question=item['id'],
+                    date=item['date'],
+                    viewcount=item['viewcount']
+                ))
+                for tag in item['tags']:
+                    cursor.execute(DB_INSERT_TAG, dict(
+                        question=item['id'],
+                        tag=tag
+                    ))
 
-        print(','.join(str(i) for i in fields), flush=True)
+            cursor.execute("COMMIT")
+        except Exception as e:
+            cursor.execute("ROLLBACK")
+            raise
 
     def _run():
         cmd, *args = ctrl.get()
+        print(cmd, *args)
         CMDS[cmd](*args)
 
     CMDS = {
         VISIT: _visit,
         STORE: _store,
     }
+
+
+    DB_URI="file:questions.db?mode=rwc"
+    DB_INIT="""
+        CREATE TABLE IF NOT EXISTS sources (
+            path TEXT PRIMARY KEY
+        );
+        CREATE TABLE IF NOT EXISTS tags (
+            question INT NOT NULL,
+            tag TEXT NOT NULL,
+            PRIMARY KEY(question, tag)
+        );
+        CREATE TABLE IF NOT EXISTS views (
+            question INT NOT NULL,
+            viewcount INT NOT NULL,
+            date TEXT NOT NULL,
+            PRIMARY KEY(date, question)
+        );
+    """
+    DB_SELECT_SOURCE="SELECT 1 FROM sources WHERE path = :path"
+    DB_INSERT_SOURCE="INSERT OR IGNORE INTO sources(path) VALUES(:path)"
+    DB_INSERT_TAG="INSERT OR IGNORE INTO tags(question, tag) VALUES(:question, :tag)"
+    DB_INSERT_VIEWCOUNT="INSERT OR IGNORE INTO views(question, date, viewcount) VALUES(:question, :date, :viewcount)"
+    db = sqlite3.connect(DB_URI, uri=True, isolation_level=None)
+    cursor = db.cursor()
+
+    cursor.executescript(DB_INIT)
 
     done = False
     while not done:
@@ -300,8 +341,6 @@ def parse_args():
     import argparse
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--with-path", help="Add source file path to the output",
-            action='store_true')
     parser.add_argument("--stdin", help="Read path from stdin",
             dest='reader',
             default=glob, action='store_const', const=stdin)
