@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from multiprocessing import JoinableQueue, Process, Semaphore
 from utils.pm import ProcessManager
 
-ROOT_DIR = 'web.archive.org'
+ROOT_DIR = 'archive'
 
 
 STORE="STORE"
@@ -258,9 +258,8 @@ def parser(queue, ctrl):
 def controller(queue, ctrl, sem):
     import sqlite3
 
-    INITIAL_TRANSACTION_TTL=10000
-
-    transaction_ttl = 0
+    cache = []
+    CACHE_MAX_SIZE = 10000
 
     def _visit(path):
         cursor.execute(DB_SELECT_SOURCE, dict(path=path.as_posix()))
@@ -272,33 +271,41 @@ def controller(queue, ctrl, sem):
     def _done():
         sem.release()
 
-    def _store(path, items):
-        nonlocal transaction_ttl
-
-        if not transaction_ttl:
-            transaction_ttl = INITIAL_TRANSACTION_TTL
-            cursor.execute("BEGIN DEFERRED TRANSACTION")
+    def _commit():
+        """ Commit cached changes to the DB
+        """
         try:
-            cursor.execute(DB_INSERT_SOURCE, dict(path=path))
-            for item in items:
-                cursor.execute(DB_INSERT_VIEWCOUNT, dict(
-                    question=item['id'],
-                    date=item['date'],
-                    viewcount=item['viewcount']
-                ))
-                for tag in item['tags']:
-                    cursor.execute(DB_INSERT_TAG, dict(
+            cursor.execute("BEGIN DEFERRED TRANSACTION")
+            for entry in cache:
+                cursor.execute(DB_INSERT_SOURCE, dict(path=entry['path']))
+                for item in entry['items']:
+                    cursor.execute(DB_INSERT_VIEWCOUNT, dict(
                         question=item['id'],
-                        tag=tag
+                        date=item['date'],
+                        viewcount=item['viewcount']
                     ))
+                    for tag in item['tags']:
+                        cursor.execute(DB_INSERT_TAG, dict(
+                            question=item['id'],
+                            tag=tag
+                        ))
+            cursor.execute("COMMIT")
+            del cache[:]
+            print("COMMIT")
 
-            transaction_ttl -= 1
-            if not transaction_ttl:
-                cursor.execute("COMMIT")
         except Exception as e:
+            print("ROLLBACK")
             cursor.execute("ROLLBACK")
-            transaction_ttl = 0
             raise
+
+    def _store(path, items):
+        cache.append(dict(
+            path=path,
+            items=items
+        ))
+
+        if len(cache) > CACHE_MAX_SIZE:
+            _commit()
 
     def _run():
         cmd, *args = ctrl.get()
@@ -313,6 +320,7 @@ def controller(queue, ctrl, sem):
 
 
     DB_URI="file:questions.db?mode=rwc"
+    DB_TIMEOUT=600
     DB_INIT="""
         CREATE TABLE IF NOT EXISTS sources (
             path TEXT PRIMARY KEY
@@ -333,7 +341,7 @@ def controller(queue, ctrl, sem):
     DB_INSERT_SOURCE="INSERT OR IGNORE INTO sources(path) VALUES(:path)"
     DB_INSERT_TAG="INSERT OR IGNORE INTO tags(question, tag) VALUES(:question, :tag)"
     DB_INSERT_VIEWCOUNT="INSERT OR IGNORE INTO views(question, date, viewcount) VALUES(:question, :date, :viewcount)"
-    db = sqlite3.connect(DB_URI, uri=True, isolation_level=None)
+    db = sqlite3.connect(DB_URI, uri=True, isolation_level=None, timeout=DB_TIMEOUT)
     cursor = db.cursor()
 
     cursor.executescript(DB_INIT)
@@ -349,8 +357,7 @@ def controller(queue, ctrl, sem):
             logging.error(err, exc_info=True)
             logging.error(err.__traceback__)
 
-    if transaction_ttl:
-        cursor.execute("COMMIT")
+    _commit()
 
 def stdin():
     for line in sys.stdin:
