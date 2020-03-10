@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from bs4 import BeautifulSoup
 
-from multiprocessing import JoinableQueue, Process
+from multiprocessing import JoinableQueue, Process, Semaphore
 from utils.pm import ProcessManager
 
 ROOT_DIR = 'web.archive.org'
@@ -13,6 +13,7 @@ ROOT_DIR = 'web.archive.org'
 
 STORE="STORE"
 VISIT="VISIT"
+DONE="DONE"
 
 class ImpreciseViewCountError(Exception):
     pass
@@ -236,7 +237,10 @@ def parser(queue, ctrl):
 
     def _run():
         path = queue.get()
-        visit(path)
+        try:
+            visit(path)
+        finally:
+            ctrl.put((DONE,))
 
     done = False
     while not done:
@@ -251,16 +255,29 @@ def parser(queue, ctrl):
 
 
 
-def controller(queue, ctrl):
+def controller(queue, ctrl, sem):
     import sqlite3
+
+    INITIAL_TRANSACTION_TTL=10000
+
+    transaction_ttl = 0
 
     def _visit(path):
         cursor.execute(DB_SELECT_SOURCE, dict(path=path.as_posix()))
         if not cursor.fetchall():
             queue.put(path)
+        else:
+            _done()
+
+    def _done():
+        sem.release()
 
     def _store(path, items):
-        cursor.execute("BEGIN DEFERRED TRANSACTION")
+        nonlocal transaction_ttl
+
+        if not transaction_ttl:
+            transaction_ttl = INITIAL_TRANSACTION_TTL
+            cursor.execute("BEGIN DEFERRED TRANSACTION")
         try:
             cursor.execute(DB_INSERT_SOURCE, dict(path=path))
             for item in items:
@@ -275,9 +292,12 @@ def controller(queue, ctrl):
                         tag=tag
                     ))
 
-            cursor.execute("COMMIT")
+            transaction_ttl -= 1
+            if not transaction_ttl:
+                cursor.execute("COMMIT")
         except Exception as e:
             cursor.execute("ROLLBACK")
+            transaction_ttl = 0
             raise
 
     def _run():
@@ -288,6 +308,7 @@ def controller(queue, ctrl):
     CMDS = {
         VISIT: _visit,
         STORE: _store,
+        DONE: _done,
     }
 
 
@@ -328,6 +349,9 @@ def controller(queue, ctrl):
             logging.error(err, exc_info=True)
             logging.error(err.__traceback__)
 
+    if transaction_ttl:
+        cursor.execute("COMMIT")
+
 def stdin():
     for line in sys.stdin:
         yield Path(line.rstrip())
@@ -350,19 +374,23 @@ def parse_args():
     return args
 
 if __name__ == '__main__':
+    QUEUE_LENGTH=10000000
+
     args = parse_args()
 
-    queue = JoinableQueue(1000000)
+    queue = JoinableQueue()
     ctrl = JoinableQueue()
+    sem = Semaphore(QUEUE_LENGTH)
 
     pm = ProcessManager(
-        Process(target=controller, args=(queue, ctrl,)),
-        *[Process(target=parser, args=(queue,ctrl)) for n in range(5)]
+        Process(target=controller, args=(queue, ctrl,sem,)),
+        *[Process(target=parser, args=(queue,ctrl,)) for n in range(5)]
     )
 
     try:
         pm.start()
         for path in args.reader():
+            sem.acquire()
             ctrl.put((VISIT,path))
 
         queue.close()
