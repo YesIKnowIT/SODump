@@ -2,3 +2,6 @@ __pycache__/
 web.archive.org*/
 .nfs*
 .*.swp
+
+*.db
+*.log
