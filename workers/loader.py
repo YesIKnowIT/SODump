@@ -3,8 +3,8 @@ import os
 import requests
 
 from utils.worker import worker
-from utils.constants import *
-from utils.commands import *
+from config.constants import *
+from config.commands import *
 from utils import Cooldown, notify
 
 def loader(ctrl, queue):

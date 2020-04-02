@@ -9,8 +9,8 @@ from utils.worker import worker
 from workers.cdx import cdx
 from workers.loader  import loader
 from workers.parser  import parser
-from utils.constants import *
-from utils.commands import *
+from config.constants import *
+from config.commands import *
 
 def controller(ctrl, loader_queue, parser_queue, sem):
     db = Db(DB_URI)

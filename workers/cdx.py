@@ -7,8 +7,8 @@ import requests
 
 from utils import Cooldown, notify
 from utils.worker import worker
-from utils.constants import *
-from utils.commands import *
+from config.constants import *
+from config.commands import *
 
 PATH_FMT="archive/{timestamp:.4}/{timestamp:.6}/{timestamp:.8}/{timestamp}/{original}"
 WAYBACK_URL_FMT="https://web.archive.org/web/{timestamp}/{original}"

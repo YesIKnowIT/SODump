@@ -5,8 +5,8 @@ from bs4 import BeautifulSoup
 
 from utils import notify
 from utils.worker import worker
-from utils.commands import *
-from utils.constants import *
+from config.commands import *
+from config.constants import *
 
 VIEWED_NNNN_TIMES_RE = re.compile('[Vv]iewed\s+[0-9]+(,[0-9]{3})\s+times?')
 NNNN_TIMES_RE = re.compile('[0-9]+(,[0-9]{3})*\s+times?')

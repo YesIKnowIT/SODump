@@ -2,7 +2,7 @@ import sys
 import os
 import time
 
-from utils.constants import *
+from config.constants import *
 
 def notify(code, *args):
     print("{:6d} {:8s}".format(os.getpid(), code), *args)
