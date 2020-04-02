@@ -56,19 +56,16 @@ def controller(ctrl, loader_queue, parser_queue, sem):
         pass
 
     def _run():
-        notify('DEBUG', sem.get_value(), len(pending), loader_queue.qsize(), parser_queue.qsize())
+        # notify('DEBUG', sem.get_value(), len(pending), loader_queue.qsize(), parser_queue.qsize())
         cmd, *args = ctrl.get()
         CMDS[cmd](*args)
 
     def _parse(path, text):
         parser_queue.put((path, text))
 
-    def _store(path, items):
+    def _store(path, status,  items=()):
         notify('STORE', path)
-        cache.append(dict(
-            path=path,
-            items=items
-        ))
+        cache.append((path, status, items))
         stats['store'] += 1
 
         if len(cache) > CACHE_MAX_SIZE:
@@ -120,7 +117,7 @@ if __name__ == '__main__':
     loader_queue = Queue()
     parser_queue = Queue()
     ctrl = SimpleQueue()
-    sem = Semaphore(100)
+    sem = Semaphore(QUEUE_LENGTH)
 
     pm = ProcessManager(
         Process(target=controller, args=(ctrl, loader_queue, parser_queue, sem)),

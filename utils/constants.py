@@ -7,14 +7,14 @@ REQUESTS_COOLDOWN=15
 MAX_SLEEP_TIME=120
 MAX_RETRY=5
 
-CACHE_MAX_SIZE=10000
+CACHE_MAX_SIZE=1000
 
-QUEUE_LENGTH=10000000
+QUEUE_LENGTH=1000
 
 URL_PREFIX = 'http://stackoverflow.com/questions/'
 CDX_API_ENDPOINT="http://web.archive.org/cdx/search/cdx"
 
-DB_URI="file:questions-r.d?mode=rwc"
+DB_URI="file:questions.db?mode=rwc"
 
 PARSER_OK = 1
 PARSER_ERROR = 2

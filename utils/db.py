@@ -100,26 +100,30 @@ class Db:
     def write(self, entries):
         cursor = self.cursor
 
+        def _write(path, status, items):
+            cursor.execute(DB_INSERT_SOURCE, dict(path=path, status=status))
+            for item in items:
+                cursor.execute(DB_INSERT_VIEWCOUNT, dict(
+                    question=item['id'],
+                    date=item['date'],
+                    viewcount=item['viewcount']
+                ))
+                for tag in item['tags']:
+                    cursor.execute(DB_INSERT_TAG, dict(
+                        question=item['id'],
+                        tag=tag
+                    ))
+
         try:
             cursor.execute("BEGIN DEFERRED TRANSACTION")
             for entry in entries:
-                cursor.execute(DB_INSERT_SOURCE, dict(path=entry['path'], status=entry['status']))
-                for item in entry['items']:
-                    cursor.execute(DB_INSERT_VIEWCOUNT, dict(
-                        question=item['id'],
-                        date=item['date'],
-                        viewcount=item['viewcount']
-                    ))
-                    for tag in item['tags']:
-                        cursor.execute(DB_INSERT_TAG, dict(
-                            question=item['id'],
-                            tag=tag
-                        ))
+                _write(*entry)
             cursor.execute("COMMIT")
+
             del entries[:]
             print("COMMIT")
 
         except Exception as e:
-            print("ROLLBACK")
             cursor.execute("ROLLBACK")
+            print("ROLLBACK")
             raise

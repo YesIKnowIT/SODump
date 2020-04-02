@@ -3,6 +3,7 @@ import re
 
 from bs4 import BeautifulSoup
 
+from utils import notify
 from utils.worker import worker
 from utils.commands import *
 from utils.constants import *
@@ -24,16 +25,18 @@ def parser(ctrl, queue):
             soup = BeautifulSoup(text, 'lxml')
 
             try:
-                if '/tagged/' in path:
-                    yield from tuple(_visit_tagged(soup))
-                else:
-                    yield from tuple(_visit_question(soup))
+                return (
+                    PARSER_OK,
+                    _visit_tagged(soup) if ('/tagged/' in path) else _visit_question(soup),
+                )
 
             except ParserError as e:
                 notify('ERROR', e)
-                yield dict(src=path, status=PARSER_ERROR)
+                return (PARSER_ERROR,)
 
         def _visit_tagged(soup):
+            result = []
+
             questions = soup.find_all('div', attrs={'class': 'question-summary'})
             if questions:
                 for question in questions:
@@ -63,18 +66,14 @@ def parser(ctrl, queue):
                     tags = question.find_all('a', attrs={'rel': 'tag'})
                     tags = sorted(set([el.get_text() for el in tags]))
 
-                    yield dict(
-                        src=path,
-                        status=PARSER_OK,
+                    result.append(dict(
                         id=qid,
                         date=date,
                         viewcount=views,
                         tags=tags
-                    )
+                    ))
 
-                return
-
-            #raise NotImplementedError
+            return result
 
         def _visit_question(soup):
             VIEWED_NNNN_TIMES_RE = re.compile('[Vv]iewed\s+[0-9]+(,[0-9]{3})\s+times?')
@@ -205,32 +204,26 @@ def parser(ctrl, queue):
 
             ci = coreinfo(soup)
             if ci is None:
-                logging.warning("coreinfo -- Can't find info for %s", path)
-                return
+                raise ParserError("coreinfo -- Can't find info for " + path)
 
             vc = viewcount(soup)
             if vc is None:
-                logging.warning("viewcount -- Can't find view count for %s", path)
-                return
+                raise ParserError("viewcount -- Can't find view count for " + path)
 
             tg = tags(soup)
             if not tg:
-                logging.warning("tags -- Can't find tags for %s", path)
-                return
+                raise ParserError("tags -- Can't find tags for " + path)
 
-            yield dict(
-                src=path,
-                status=PARSER_OK,
+            return (dict(
                 viewcount=vc,
                 tags=tg,
                 **ci
-            )
+            ),)
 
 
 
         try:
-            result = tuple(_visit())
-            ctrl.put((STORE, path, result))
+            ctrl.put((STORE, path, *_visit()))
         except ImpreciseViewCountError as err:
             logging.warning(err)
 
