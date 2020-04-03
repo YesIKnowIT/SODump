@@ -7,7 +7,7 @@ from utils.worker import worker
 from config.commands import *
 from config.constants import *
 
-VIEWED_NNNN_TIMES_RE = re.compile('[Vv]iewed\s+[0-9]+(,[0-9]{3})\s+times?')
+VIEWED_NNNN_TIMES_RE = re.compile('[Vv]iewed\s+[0-9]+(,[0-9]{3})*\s+times?')
 NNNN_TIMES_RE = re.compile('[0-9]+(,[0-9]{3})*\s+times?')
 VIEWED_RE=re.compile('[Vv]iewed')
 
