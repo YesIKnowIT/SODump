@@ -22,6 +22,7 @@ DB_INIT="""
         key TEXT PRIMARY KEY,
         value TEXT
     );
+    INSERT OR IGNORE INTO meta(key,value) VALUES ('version','0')
 """
 DB_SELECT_SOURCE="SELECT 1 FROM sources WHERE path = :path"
 DB_INSERT_SOURCE="INSERT OR REPLACE INTO sources(path, status) VALUES(:path, :status)"
@@ -38,23 +39,48 @@ class Db:
         cursor.executescript(DB_INIT)
 
         self.loadMetadata()
-        self.setMetadata('version', 1)
 
     #
     # Metadata
     #
     def loadMetadata(self):
-        CURR_DB_VERSION = 1
+        CURR_DB_VERSION = 2
 
         def updateToVersion1():
             cursor.executescript("""
+                BEGIN DEFERRED TRANSACTION;
                 ALTER TABLE sources ADD COLUMN status INT DEFAULT 1;
                 UPDATE meta SET value=1 where KEY='version';
+                COMMIT;
+            """)
+
+        def updateToVersion2():
+            cursor.executescript("""
+                BEGIN DEFERRED TRANSACTION;
+                DROP TABLE IF EXISTS sources_v2;
+                CREATE TABLE sources_v2 (
+                    path TEXT PRIMARY KEY,
+                    status TEXT NOT NULL
+                );
+
+                INSERT INTO sources_v2(path,status)
+                    SELECT path, CASE status
+                                    WHEN 0 THEN ''
+                                    WHEN 1 THEN 'OK'
+                                    WHEN 2 THEN 'ERROR'
+                                    ELSE 'UNKNOWN' END
+                        FROM sources;
+
+                DROP TABLE sources;
+                ALTER TABLE sources_v2 RENAME TO sources;
+                UPDATE meta SET value=2 where KEY='version';
+                COMMIT;
             """)
 
         cursor = self.cursor
         updater = (
             updateToVersion1,
+            updateToVersion2,
         )
 
         while True:
@@ -95,7 +121,7 @@ class Db:
         if not result:
             return None
 
-        return result[0][0]
+        return bool(result[0][0])
 
     def write(self, entries):
         cursor = self.cursor

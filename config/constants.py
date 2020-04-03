@@ -16,8 +16,8 @@ CDX_API_ENDPOINT="http://web.archive.org/cdx/search/cdx"
 
 DB_URI="file:questions.db?mode=rwc"
 
-PARSER_OK = 1
-PARSER_ERROR = 2
+PARSER_OK = 'OK'
+PARSER_ERROR = 'ERROR'
 
 
 LOADER_PROCESS_COUNT=16
