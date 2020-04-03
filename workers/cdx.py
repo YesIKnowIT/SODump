@@ -29,7 +29,7 @@ def capturetopath(capture):
 
     return (path, url)
 
-def cdx(ctrl, sem, url):
+def cdx(ctrl, queue, sem, url):
     """ Query the CDX index to retrieve all captures for the `url` prefix
     """
 
@@ -45,7 +45,7 @@ def cdx(ctrl, sem, url):
     params = dict(
         url=url,
         matchType='prefix',
-        limit=5000,
+        limit=CDX_LIMIT,
         showResumeKey='true',
         resumeKey=None
     )
@@ -54,41 +54,48 @@ def cdx(ctrl, sem, url):
     params['fl'] = ",".join(fields)
 
     def _next():
+        notify('DEBUG', 'cdx get')
+        resumeKey = queue.get()
         cooldown.wait()
 
-        r = requests.get(CDX_API_ENDPOINT,
-            timeout=REQUESTS_TIMEOUT,
-            headers = {
-                'user-agent':REQUESTS_USER_AGENT,
-            },
-            stream=True,
-            params=params)
-        notify("CDX", r.status_code)
-        if r.status_code != 200:
-            cooldown.set()
-            return False
+        try:
+            params['resumeKey'] = resumeKey
+            r = requests.get(CDX_API_ENDPOINT,
+                    timeout=REQUESTS_TIMEOUT,
+                    headers = {
+                        'user-agent':REQUESTS_USER_AGENT,
+                    },
+                    stream=True,
+                    params=params)
+            notify("CDX", r.status_code)
+            if r.status_code != 200:
+                cooldown.set()
+                return False
 
-        count = 0
-        items = []
-        for line in r.iter_lines():
-            count += 1
-            if not line:
-                # ignore empty lines
-                continue
+            count = 0
+            items = []
+            for line in r.iter_lines():
+                count += 1
+                if not line:
+                    # ignore empty lines
+                    continue
 
-            line = line.decode('utf-8')
-            item = line.split()
-            if len(item) == 1:
-                # resume key
-                params['resumeKey'] = urllib.parse.unquote_plus(item[0])
-                break
+                line = line.decode('utf-8')
+                item = line.split()
+                if len(item) == 1:
+                    # resume key
+                    resumeKey = urllib.parse.unquote_plus(item[0])
+                    notify('DEBUG', resumeKey)
+                    break
 
-            # else
-            item = {
-                k: v for k,v in zip(fields, item)
-            }
-            if item.get("statuscode") == "200":
-                items.append(item)
+                # else
+                item = {
+                    k: v for k,v in zip(fields, item)
+                }
+                if item.get("statuscode") == "200":
+                    items.append(item)
+        finally:
+            ctrl.put((CDX, resumeKey))
 
         for item in items:
                 notify("PUSH", item['timestamp'], item['original'])
@@ -97,6 +104,7 @@ def cdx(ctrl, sem, url):
                 ctrl.put((LOAD,*capturetopath(item)))
 
         cooldown.clear()
+        notify('DEBUG', count)
         return count == 0
 
     def _run():

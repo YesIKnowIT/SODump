@@ -17,6 +17,7 @@ QUEUE_LENGTH=1000
 
 URL_PREFIX = 'http://stackoverflow.com/questions/'
 CDX_API_ENDPOINT="http://web.archive.org/cdx/search/cdx"
+CDX_LIMIT=10000
 
 DB_URI="file:{}?mode=rwc".format("test.db" if DEBUG else "questions.db")
 
@@ -27,5 +28,6 @@ PARSER_CORE_DATA_ERROR = 'DATAERR_CD'
 PARSER_VIEW_COUNT_ERROR = 'DATAERR_VC'
 
 
+CDX_PROCESS_COUNT=2
 LOADER_PROCESS_COUNT=16
-PARSER_PROCESS_COUNT=4
+PARSER_PROCESS_COUNT=5

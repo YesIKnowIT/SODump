@@ -1,3 +1,4 @@
+CDX="CDX"
 DONE="DONE"
 LOAD="LOAD" # Push URL to fetch
 PARSE="PARSE" # Parse a page"

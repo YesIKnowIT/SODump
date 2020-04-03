@@ -12,7 +12,7 @@ from workers.parser  import parser
 from config.constants import *
 from config.commands import *
 
-def controller(ctrl, loader_queue, parser_queue, sem):
+def controller(ctrl, cdx_queue, loader_queue, parser_queue, sem):
     db = Db(DB_URI)
     pending = {}
     cache = []
@@ -58,7 +58,11 @@ def controller(ctrl, loader_queue, parser_queue, sem):
     def _run():
         # notify('DEBUG', sem.get_value(), len(pending), loader_queue.qsize(), parser_queue.qsize())
         cmd, *args = ctrl.get()
+        # notify('DO', cmd, *[arg[:10] for arg in args])
         CMDS[cmd](*args)
+
+    def _cdx(resumeKey):
+        cdx_queue.put(resumeKey)
 
     def _parse(path, text):
         parser_queue.put((path, text))
@@ -78,6 +82,7 @@ def controller(ctrl, loader_queue, parser_queue, sem):
         stats['commit'] += 1
 
     CMDS = {
+        CDX: _cdx,
         DONE: _done,
         LOAD: _load,
         PARSE: _parse,
@@ -86,6 +91,7 @@ def controller(ctrl, loader_queue, parser_queue, sem):
         UNLOCK: _unlock,
     }
 
+    cdx_queue.put(None)
     worker(_run, "controller", stats)
     _commit()
 
@@ -116,12 +122,13 @@ if __name__ == '__main__':
 
     loader_queue = Queue()
     parser_queue = Queue()
+    cdx_queue = SimpleQueue()
     ctrl = SimpleQueue()
     sem = Semaphore(QUEUE_LENGTH)
 
     pm = ProcessManager(
-        Process(target=controller, args=(ctrl, loader_queue, parser_queue, sem)),
-        Process(target=cdx, args=(ctrl, sem, URL_PREFIX)),
+        Process(target=controller, args=(ctrl, cdx_queue, loader_queue, parser_queue, sem)),
+        *[Process(target=cdx, args=(ctrl,cdx_queue, sem, URL_PREFIX)) for n in range(CDX_PROCESS_COUNT)],
         *[Process(target=loader, args=(ctrl,loader_queue)) for n in range(LOADER_PROCESS_COUNT)],
         *[Process(target=parser, args=(ctrl,parser_queue)) for n in range(PARSER_PROCESS_COUNT)],
     )
