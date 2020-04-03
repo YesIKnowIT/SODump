@@ -44,7 +44,7 @@ class Db:
     # Metadata
     #
     def loadMetadata(self):
-        CURR_DB_VERSION = 2
+        CURR_DB_VERSION = 3
 
         def updateToVersion1():
             cursor.executescript("""
@@ -77,10 +77,19 @@ class Db:
                 COMMIT;
             """)
 
+        def updateToVersion3():
+            cursor.executescript("""
+                BEGIN DEFERRED TRANSACTION;
+                DELETE FROM sources WHERE status='ERROR';
+                UPDATE meta SET value=3 where KEY='version';
+                COMMIT;
+            """)
+
         cursor = self.cursor
         updater = (
             updateToVersion1,
             updateToVersion2,
+            updateToVersion3,
         )
 
         while True:

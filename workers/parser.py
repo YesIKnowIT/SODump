@@ -1,4 +1,3 @@
-import logging
 import re
 
 from bs4 import BeautifulSoup
@@ -18,10 +17,16 @@ CANONICAL_RE = re.compile('/(?P<date>[0-9]{14})/.*/questions/(?P<id>[0-9]+)')
 OG_URL_RE = re.compile('/(?P<date>[0-9]{14})(?:im_)?/.*/questions/(?P<id>[0-9]+)')
 
 class ParserError(Exception):
-    pass
+    def __init__(self, fmt, *args, **kwargs):
+        msg = fmt.format(*args, **kwargs)
+        super().__init__(msg)
+    code = PARSER_ERROR
 
-class ImpreciseViewCountError(ParserError):
-    pass
+class ViewCountError(ParserError):
+    code = PARSER_VIEW_COUNT_ERROR
+
+class CoreDataError(ParserError):
+    code = PARSER_CORE_DATA_ERROR
 
 def visit(text, path):
     def _visit_tagged(soup):
@@ -45,11 +50,9 @@ def visit(text, path):
                 vc = views = views.get('title') or views.get_text()
                 views = re.search('([0-9]+(,[0-9]{3})*)([k])?\s', views)
                 if views is None:
-                    logging.warning("tagged -- Can't understand view count '%s' in %s", vc, path)
-                    continue
+                    raise ViewCountError("tagged -- Can't understand view count '{}' in {}", vc, path)
                 elif views.group(3):
-                    logging.warning("tagged -- Imprecise '%s' in %s", vc, path)
-                    continue
+                    raise ViewCountError("tagged -- Imprecise '%s' in %s", vc, path)
 
                 views = int(views.group(1).replace(',',''))
 
@@ -71,7 +74,7 @@ def visit(text, path):
                 count, suffix = re.search('([0-9]+(?:,[0-9]{3})*)([k]?)', str(txt)).group(1, 2)
 
                 if suffix:
-                    raise ImpreciseViewCountError("View count {}{} is imprecise for {}".format(count, suffix, path))
+                    raise ViewCountError("View count {}{} is imprecise for {}".format(count, suffix, path))
 
                 count = count.replace(',','')
                 return int(count)
@@ -182,15 +185,15 @@ def visit(text, path):
 
         ci = coreinfo(soup)
         if ci is None:
-            raise ParserError("coreinfo -- Can't find info for " + path)
+            raise CoreDataError("coreinfo -- Can't find info for {}", path)
 
         vc = viewcount(soup)
         if vc is None:
-            raise ParserError("viewcount -- Can't find view count for " + path)
+            raise CoreDataError("viewcount -- Can't find view count for {}", path)
 
         tg = tags(soup)
         if not tg:
-            raise ParserError("tags -- Can't find tags for " + path)
+            raise CoreDataError("tags -- Can't find tags for {}", path)
 
         return (dict(
             viewcount=vc,
@@ -207,7 +210,9 @@ def visit(text, path):
 
     except ParserError as e:
         notify('ERROR', e)
-        return (PARSER_ERROR,)
+        return (e.code,)
+    except Exception:
+        return (PARSER_SYS_ERROR,)
 
 
 def parser(ctrl, queue):
@@ -215,9 +220,6 @@ def parser(ctrl, queue):
 
     def _run():
         path, text = queue.get()
-        try:
-            ctrl.put((STORE, path, *visit(text, path)))
-        except ImpreciseViewCountError as err:
-            logging.warning(err)
+        ctrl.put((STORE, path, *visit(text, path)))
 
     return worker(_run, "parser", stats)
