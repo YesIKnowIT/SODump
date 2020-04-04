@@ -22,11 +22,11 @@ class ParserError(Exception):
         super().__init__(msg)
     code = PARSER_ERROR
 
-class ViewCountError(ParserError):
-    code = PARSER_VIEW_COUNT_ERROR
+class ImpreciseError(ParserError):
+    code = PARSER_IMPRECISE_ERROR
 
-class CoreDataError(ParserError):
-    code = PARSER_CORE_DATA_ERROR
+class DataNotFoundError(ParserError):
+    code = PARSER_DATA_NOT_FOUND_ERROR
 
 def visit(text, path):
     def _visit_tagged(soup):
@@ -50,9 +50,9 @@ def visit(text, path):
                 vc = views = views.get('title') or views.get_text()
                 views = re.search('([0-9]+(,[0-9]{3})*)([k])?\s', views)
                 if views is None:
-                    raise ViewCountError("tagged -- Can't understand view count '{}' in {}", vc, path)
+                    raise ImpreciseError("tagged -- Can't understand view count '{}' in {}", vc, path)
                 elif views.group(3):
-                    raise ViewCountError("tagged -- Imprecise '%s' in %s", vc, path)
+                    raise ImpreciseError("tagged -- Imprecise '%s' in %s", vc, path)
 
                 views = int(views.group(1).replace(',',''))
 
@@ -74,7 +74,7 @@ def visit(text, path):
                 count, suffix = re.search('([0-9]+(?:,[0-9]{3})*)([k]?)', str(txt)).group(1, 2)
 
                 if suffix:
-                    raise ViewCountError("View count {}{} is imprecise for {}".format(count, suffix, path))
+                    raise ImpreciseError("View count {}{} is imprecise for {}".format(count, suffix, path))
 
                 count = count.replace(',','')
                 return int(count)
@@ -185,15 +185,15 @@ def visit(text, path):
 
         ci = coreinfo(soup)
         if ci is None:
-            raise CoreDataError("coreinfo -- Can't find info for {}", path)
+            raise DataNotFoundError("coreinfo -- Can't find info for {}", path)
 
         vc = viewcount(soup)
         if vc is None:
-            raise CoreDataError("viewcount -- Can't find view count for {}", path)
+            raise DataNotFoundError("viewcount -- Can't find view count for {}", path)
 
         tg = tags(soup)
         if not tg:
-            raise CoreDataError("tags -- Can't find tags for {}", path)
+            raise DataNotFoundError("tags -- Can't find tags for {}", path)
 
         return (dict(
             viewcount=vc,
