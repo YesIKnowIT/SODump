@@ -1,7 +1,6 @@
 import sqlite3
 
-
-DB_TIMEOUT=600
+DB_DEFAULT_TIMEOUT=600
 DB_INIT="""
     CREATE TABLE IF NOT EXISTS sources (
         path TEXT PRIMARY KEY
@@ -32,8 +31,8 @@ DB_INSERT_VIEWCOUNT="INSERT OR IGNORE INTO views(question, date, viewcount) VALU
 
 
 class Db:
-    def __init__(self, uri):
-        db = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=DB_TIMEOUT)
+    def __init__(self, uri, **kwargs):
+        db = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=kwargs.get('timeout', DB_DEFAULT_TIMEOUT))
 
         self.cursor = cursor = db.cursor()
         cursor.executescript(DB_INIT)

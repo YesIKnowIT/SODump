@@ -20,6 +20,7 @@ CDX_API_ENDPOINT="http://web.archive.org/cdx/search/cdx"
 CDX_LIMIT=10000
 
 DB_URI="file:{}?mode=rwc".format("test.db" if DEBUG else "questions.db")
+DB_TIMEOUT=7200
 
 PARSER_OK = 'OK'
 PARSER_ERROR = 'ERROR'
