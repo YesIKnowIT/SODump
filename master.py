@@ -13,7 +13,7 @@ from config.constants import *
 from config.commands import *
 
 def controller(ctrl, cdx_queue, loader_queue, parser_queue, sem):
-    db = Db(DB_URI, timeout=DB_TIMEOUT)
+    db = Db(DB_URI, timeout=DB_TIMEOUT, mode="rwc")
     pending = {}
     cache = []
     stats = {

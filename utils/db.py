@@ -16,6 +16,8 @@ DB_INIT="""
         date TEXT NOT NULL,
         PRIMARY KEY(date, question)
     );
+    CREATE INDEX IF NOT EXISTS views_question_idx ON views(question);
+
     CREATE TABLE IF NOT EXISTS meta (
 
         key TEXT PRIMARY KEY,
@@ -28,21 +30,28 @@ DB_INSERT_SOURCE="INSERT OR REPLACE INTO sources(path, status) VALUES(:path, :st
 DB_INSERT_TAG="INSERT OR IGNORE INTO tags(question, tag) VALUES(:question, :tag)"
 DB_INSERT_VIEWCOUNT="INSERT OR IGNORE INTO views(question, date, viewcount) VALUES(:question, :date, :viewcount)"
 
+DB_COUNT_SOURCES="SELECT COUNT(*) FROM sources"
 
 
 class Db:
-    def __init__(self, uri, **kwargs):
-        db = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=kwargs.get('timeout', DB_DEFAULT_TIMEOUT))
+    def __init__(self, filepath, *, timeout=None, mode="ro"):
+        if timeout is None:
+            timeout = DB_DEFAULT_TIMEOUT
+
+        uri = "file:{filepath}?mode={mode}".format(filepath=filepath, mode=mode)
+        db = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=timeout)
 
         self.cursor = cursor = db.cursor()
-        cursor.executescript(DB_INIT)
 
-        self.loadMetadata()
+        if 'c' in mode:
+            cursor.executescript(DB_INIT)
+
+        self.loadMetadata('w' in mode)
 
     #
     # Metadata
     #
-    def loadMetadata(self):
+    def loadMetadata(self, upgrade):
         CURR_DB_VERSION = 3
 
         def updateToVersion1():
@@ -96,7 +105,10 @@ class Db:
             if self.db_version == CURR_DB_VERSION:
                 break
 
-            updater[self.db_version]()
+            if upgrade:
+                updater[self.db_version]()
+            else:
+                raise 'Unsupported DB version'
 
     def getMetadata(self, key, default=None):
         cursor = self.cursor
@@ -161,3 +173,11 @@ class Db:
             cursor.execute("ROLLBACK")
             print("ROLLBACK")
             raise
+
+    def fcount(self):
+        cursor = self.cursor
+        cursor.execute(DB_COUNT_SOURCES)
+        ((count,),) = cursor.fetchall()
+
+        return count
+
