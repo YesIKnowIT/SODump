@@ -10,7 +10,7 @@ from utils.worker import worker
 from config.constants import *
 from config.commands import *
 
-PATH_FMT="archive/{timestamp:.4}/{timestamp:.6}/{timestamp:.8}/{timestamp}/{original}"
+PATH_FMT="{timestamp}/{original}"
 WAYBACK_URL_FMT="https://web.archive.org/web/{timestamp}/{original}"
 def capturetopath(capture):
     url = WAYBACK_URL_FMT.format_map(capture)
@@ -18,8 +18,6 @@ def capturetopath(capture):
 
     # Sanitize path
     path = path.replace('/?', '?')
-    if path.endswith('/'):
-        path = path[:-1:] + '.index'
     path = re.sub(r':80/', '/', path)
 
     # Skip the protocol at the start of the URL but also in anywhere in the URL because
