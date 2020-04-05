@@ -6,33 +6,36 @@ from utils.pm import ProcessManager
 from utils import notify
 from utils.db import Db
 from utils.worker import worker
+from workers.db import db
 from workers.cdx import cdx
 from workers.loader  import loader
 from workers.parser  import parser
 from config.constants import *
 from config.commands import *
 
-def controller(ctrl, cdx_queue, loader_queue, parser_queue, sem):
-    db = Db(DB_URI, timeout=DB_TIMEOUT, mode="rwc")
+def controller(ctrl, db_queue, cdx_queue, loader_queue, parser_queue, sem):
     pending = {}
     cache = []
     stats = {
        'ttl': [0]*MAX_RETRY,
-       'skip': 0,
+       'check': 0,
        'commit': 0,
        'store': 0,
     }
 
-    def _load(path, url):
+    def _check(path, url):
         key = path
         if key not in pending:
-            if not db.exists(key):
-                _retry(path, url)
-                return
-            else:
-                stats['skip'] += 1
+            stats['check'] += 1
+            db_queue.put((CHECK, path, url))
+        else:
+            _discard(path, url)
 
+    def _discard(path, url):
         sem.release()
+
+    def _load(path, url):
+        _retry(path, url)
 
     def _retry(path, url):
         key = path
@@ -62,7 +65,9 @@ def controller(ctrl, cdx_queue, loader_queue, parser_queue, sem):
         CMDS[cmd](*args)
 
     def _cdx(resumeKey):
+        notify('CDX', resumeKey)
         cdx_queue.put(resumeKey)
+        notify('CDX', 'done')
 
     def _parse(path, text):
         parser_queue.put((path, text))
@@ -76,13 +81,14 @@ def controller(ctrl, cdx_queue, loader_queue, parser_queue, sem):
             _commit()
 
     def _commit():
-        """ Commit cached changes to the DB
-        """
-        db.write(cache)
+        db_queue.put((COMMIT, cache))
+        cache = []
         stats['commit'] += 1
 
     CMDS = {
         CDX: _cdx,
+        CHECK: _check,
+        DISCARD: _discard,
         DONE: _done,
         LOAD: _load,
         PARSE: _parse,
@@ -122,12 +128,14 @@ if __name__ == '__main__':
 
     loader_queue = Queue()
     parser_queue = Queue()
-    cdx_queue = SimpleQueue()
-    ctrl = SimpleQueue()
+    cdx_queue = Queue()
+    db_queue = Queue()
+    ctrl = Queue()
     sem = Semaphore(QUEUE_LENGTH)
 
     pm = ProcessManager(
-        Process(target=controller, args=(ctrl, cdx_queue, loader_queue, parser_queue, sem)),
+        Process(target=controller, args=(ctrl, db_queue, cdx_queue, loader_queue, parser_queue, sem)),
+        Process(target=db, args=(ctrl, db_queue)),
         *[Process(target=cdx, args=(ctrl,cdx_queue, sem, URL_PREFIX)) for n in range(CDX_PROCESS_COUNT)],
         *[Process(target=loader, args=(ctrl,loader_queue)) for n in range(LOADER_PROCESS_COUNT)],
         *[Process(target=parser, args=(ctrl,parser_queue)) for n in range(PARSER_PROCESS_COUNT)],

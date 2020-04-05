@@ -52,7 +52,6 @@ def cdx(ctrl, queue, sem, url):
     params['fl'] = ",".join(fields)
 
     def _next():
-        notify('DEBUG', 'cdx get')
         resumeKey = queue.get()
         cooldown.wait()
 
@@ -96,10 +95,10 @@ def cdx(ctrl, queue, sem, url):
             ctrl.put((CDX, resumeKey))
 
         for item in items:
-                notify("PUSH", item['timestamp'], item['original'])
+                # notify("PUSH", item['timestamp'], item['original'])
                 stats['push'] += 1
                 sem.acquire()
-                ctrl.put((LOAD,*capturetopath(item)))
+                ctrl.put((CHECK,*capturetopath(item)))
 
         cooldown.clear()
         notify('DEBUG', count)

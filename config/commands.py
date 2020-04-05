@@ -1,4 +1,7 @@
 CDX="CDX"
+CHECK="CHECK"
+COMMIT="COMMIT"
+DISCARD="DISCARD"
 DONE="DONE"
 LOAD="LOAD" # Push URL to fetch
 PARSE="PARSE" # Parse a page"
