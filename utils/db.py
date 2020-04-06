@@ -191,5 +191,5 @@ class Db:
         cursor = self.cursor
         for row in cursor.execute(QUERY):
             row = (*row[:3], *sorted(row[3].split(',')))
-            fct(row)
+            fct = fct(row)
 
