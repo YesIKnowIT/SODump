@@ -69,6 +69,7 @@ def cdx(ctrl, queue, sem, url):
                 cooldown.set()
                 return False
 
+            resumeKey = None
             count = 0
             items = []
             for line in r.iter_lines():
@@ -80,6 +81,10 @@ def cdx(ctrl, queue, sem, url):
                 line = line.decode('utf-8')
                 item = line.split()
                 if len(item) == 1:
+                    # TEST ONLY
+                    # break
+                    # END TEST ONLY
+
                     # resume key
                     resumeKey = urllib.parse.unquote_plus(item[0])
                     notify('DEBUG', resumeKey)
@@ -102,6 +107,7 @@ def cdx(ctrl, queue, sem, url):
 
         cooldown.clear()
         notify('DEBUG', count)
+
         return count == 0
 
     def _run():

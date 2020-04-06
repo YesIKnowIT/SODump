@@ -13,6 +13,42 @@ from workers.parser  import parser
 from config.constants import *
 from config.commands import *
 
+class State:
+    def __init__(self):
+        self.running = True
+        self.stopping = False
+        self.blen = {}
+
+    def __setitem__(self, key, value):
+        if not self.running:
+            raise("Can't change state when not running")
+
+        value = int(value)
+        if value < 0:
+            raise("Can't set state to a negative value")
+
+        self.blen[key] = value
+
+        if not value and self.stopping:
+            self.update()
+
+    def __getitem__(self, key):
+        return self.blen.get(key, 0)
+
+    def stop(self):
+        self.stopping = True
+        self.update()
+
+    def update(self):
+        if not self.stopping:
+            return
+
+        for v in self.blen.values():
+            if v:
+                return
+
+        self.running = False
+
 def controller(ctrl, db_queue, cdx_queue, loader_queue, parser_queue, sem):
     pending = {}
     cache = []
@@ -22,6 +58,8 @@ def controller(ctrl, db_queue, cdx_queue, loader_queue, parser_queue, sem):
        'commit': 0,
        'store': 0,
     }
+
+    state = State()
 
     def _check(path, url):
         key = path
@@ -44,15 +82,18 @@ def controller(ctrl, db_queue, cdx_queue, loader_queue, parser_queue, sem):
         stats['ttl'][ttl] += 1
 
         if ttl == 0:
+            state['inloader'] -= 1
             del pending[key]
             sem.release()
         else:
+            state['inloader'] += 1
             pending[key] = ttl
             loader_queue.put((path,url))
 
     def _done(path):
         key = path
         pending.pop(key, None)
+        state['inloader'] -= 1
         sem.release()
 
     def _unlock():
@@ -64,13 +105,21 @@ def controller(ctrl, db_queue, cdx_queue, loader_queue, parser_queue, sem):
         # notify('DO', cmd, *[arg[:10] for arg in args])
         CMDS[cmd](*args)
 
+        return not state.running
+
     def _cdx(resumeKey):
-        notify('CDX', resumeKey)
-        cdx_queue.put(resumeKey)
-        notify('CDX', 'done')
+        if resumeKey is None:
+            state.stop()
+        else:
+            notify('CDX', resumeKey)
+            cdx_queue.put(resumeKey)
 
     def _parse(path, text):
+        state['inparser'] += 1
         parser_queue.put((path, text))
+
+    def _parser_done():
+        state['inparser'] -= 1
 
     def _store(path, status,  items=()):
         notify('STORE', path)
@@ -82,7 +131,7 @@ def controller(ctrl, db_queue, cdx_queue, loader_queue, parser_queue, sem):
 
     def _commit():
         db_queue.put((COMMIT, cache))
-        cache = []
+        del cache[:]
         stats['commit'] += 1
 
     CMDS = {
