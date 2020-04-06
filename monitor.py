@@ -43,5 +43,5 @@ while True:
     except Exception as e:
         logging.error(traceback.format_exc())
     finally:
-        time.sleep(12*HOUR)
+        time.sleep(16*HOUR)
 
