@@ -181,3 +181,15 @@ class Db:
 
         return count
 
+    def forEachQuestion(self, fct):
+        QUERY = """
+            SELECT date, question, viewcount, group_concat(tag, ',')
+            FROM views INNER JOIN tags USING (question)
+            GROUP BY date, question
+            ORDER BY date, question
+        """
+        cursor = self.cursor
+        for row in cursor.execute(QUERY):
+            row = (*row[:3], *sorted(row[3].split(',')))
+            fct(row)
+
